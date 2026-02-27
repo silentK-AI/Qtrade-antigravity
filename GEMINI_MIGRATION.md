@@ -97,3 +97,5 @@ python main.py --stock-code 000001
 2. `GOOGLE_API_KEY` 环境变量是否设置
 3. 模型名称格式是否正确（`google/gemini-pro`）
 
+
+

@@ -28,8 +28,15 @@ def create_data_collection_task(stock_code: str, start_date: str = None, end_dat
         请获取股票代码为 {stock_code} 的历史交易数据。
         
         要求：
-        1. 获取过去三年的每日交易数据（如果未指定日期范围）
-        2. 必须包含以下关键指标：
+        1. 首先使用工具获取股票数据，工具会自动获取股票名称和历史交易数据
+        2. 在报告中明确说明股票代码和股票名称（例如：002050 三花智控），确保股票名称准确无误
+        3. 获取从当前北京时间倒序过去三年的每日交易数据，数据时间范围应该是最新的，使用北京时间计算
+           - 严格要求：报告中必须原样包含工具返回的校验行：
+             - 形如：RANGE_CHECK: <开始>~<结束>
+             - 形如：LATEST_DATE: <最后交易日>
+           - 禁止编造或改写日期格式，必须与工具输出一致
+        4. 必须包含以下关键指标：
+           - 股票代码和股票名称
            - 日期
            - 开盘价
            - 收盘价
@@ -42,11 +49,13 @@ def create_data_collection_task(stock_code: str, start_date: str = None, end_dat
            - 涨跌幅
            - 振幅
         
-        3. 如果指定了开始日期({start_date})和结束日期({end_date})，请使用指定的日期范围
+        5. 如果指定了开始日期({start_date})和结束日期({end_date})，请使用指定的日期范围
         
-        4. 整理并格式化数据，确保数据完整且易于后续分析使用
+        6. 整理并格式化数据，确保数据完整且易于后续分析使用
         
-        5. 提供数据的统计摘要，包括：
+        7. 提供数据的统计摘要，包括：
+           - 股票代码和股票名称
+           - 数据期间（明确显示开始日期和结束日期）
            - 总交易日数
            - 平均收盘价
            - 最高收盘价
@@ -114,21 +123,29 @@ def create_news_collection_task(stock_code: str) -> Task:
     return task
 
 
-def create_analysis_task(stock_code: str) -> Task:
+def create_analysis_task(stock_code: str, prediction_date_desc: str = None) -> Task:
     """
     创建分析决策任务
     
     Args:
         stock_code: 股票代码
+        prediction_date_desc: 预测日期描述（如"2025年11月12日（当天）"）
     
     Returns:
         分析决策任务
     """
+    from utils.date_utils import format_prediction_date_desc
+    
+    # 如果没有提供日期描述，自动获取
+    if prediction_date_desc is None:
+        prediction_date_desc = format_prediction_date_desc()
+    
     agent = create_analysis_agent()
     
     task = Task(
         description=f"""
-        请基于收集到的历史交易数据和最新资讯，对股票代码为 {stock_code} 的当日价格进行预测。
+        请基于收集到的历史交易数据和最新资讯，对股票代码为 {stock_code} 的{prediction_date_desc}价格进行预测。
+        请注意：报告中所有出现的“当日/今日/今天”等日期概念，均指代：{prediction_date_desc}。严禁引用其他历史日期作为“当日”。
         
         要求：
         1. 综合分析以下数据：
@@ -144,7 +161,7 @@ def create_analysis_task(stock_code: str) -> Task:
            - 基本面分析：结合公司公告和研报信息
            - 市场环境分析：考虑宏观经济和政策因素
         
-        3. 预测当日最高价和最低价：
+        3. 预测{prediction_date_desc}的最高价和最低价：
            - 提供最高价预测值
            - 提供最低价预测值
            - 说明预测依据和逻辑
@@ -153,10 +170,10 @@ def create_analysis_task(stock_code: str) -> Task:
         4. 识别潜在的风险因素和不确定性
         """,
         agent=agent,
-        expected_output="""
+        expected_output=f"""
         格式化的价格预测报告，包括：
-        1. 当日最高价预测值
-        2. 当日最低价预测值
+        1. {prediction_date_desc}最高价预测值
+        2. {prediction_date_desc}最低价预测值
         3. 预测依据和逻辑说明
         4. 使用的分析方法和技术指标
         5. 预测置信度评估
@@ -168,21 +185,26 @@ def create_analysis_task(stock_code: str) -> Task:
     return task
 
 
-def create_evaluation_task(stock_code: str) -> Task:
+def create_evaluation_task(stock_code: str, report_date: str = None) -> Task:
     """
     创建评估任务
     
     Args:
         stock_code: 股票代码
+        report_date: 报告日期（当前北京时间，格式：YYYY年MM月DD日）
     
     Returns:
         评估任务
     """
+    from utils.date_utils import format_current_beijing_date
+    if report_date is None:
+        report_date = format_current_beijing_date()
     agent = create_evaluator_agent()
     
     task = Task(
         description=f"""
         请对股票代码为 {stock_code} 的价格预测结果进行全面评估。
+        请注意：本评估报告的“评估日期”必须严格使用当前北京时间：{report_date}。严禁使用历史日期或虚构日期。
         
         要求：
         1. 评估预测结果的合理性：
@@ -208,9 +230,10 @@ def create_evaluation_task(stock_code: str) -> Task:
            - 风险控制建议
         """,
         agent=agent,
-        expected_output="""
+        expected_output=f"""
         格式化的评估报告，包括：
-        1. 预测结果评估（合理性、可靠性等）
+        1. 报告头部需包含：股票代码与名称（若有）、评估日期（必须为：{report_date}）
+        2. 预测结果评估（合理性、可靠性等）
         2. 识别的问题和风险
         3. 具体的优化建议
         4. 改进措施和行动计划
@@ -219,4 +242,5 @@ def create_evaluation_task(stock_code: str) -> Task:
     )
     
     return task
+
 

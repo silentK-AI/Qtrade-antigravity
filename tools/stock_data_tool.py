@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import logging
+from utils.date_utils import get_beijing_time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,13 +39,16 @@ class StockDataTool:
             包含股票数据的字典
         """
         try:
+            # 使用北京时间计算日期
+            beijing_time = get_beijing_time()
+            
             # 如果没有指定开始日期，默认获取过去三年的数据
             if start_date is None:
-                three_years_ago = datetime.now() - timedelta(days=3*365)
+                three_years_ago = beijing_time - timedelta(days=3*365)
                 start_date = three_years_ago.strftime("%Y%m%d")
             
             if end_date is None:
-                end_date = datetime.now().strftime("%Y%m%d")
+                end_date = beijing_time.strftime("%Y%m%d")
             
             logger.info(f"正在获取股票 {stock_code} 从 {start_date} 到 {end_date} 的数据...")
             
@@ -178,13 +182,47 @@ def get_stock_history_tool_func(stock_code: str, start_date: Optional[str] = Non
         格式化的字符串结果
     """
     tool = StockDataTool()
+    
+    # 先获取股票基本信息（包括股票名称）
+    stock_info = tool.get_stock_basic_info(stock_code)
+    stock_name = "未知"
+    if stock_info["success"] and stock_info["data"]:
+        # 尝试从基本信息中获取股票名称
+        info_data = stock_info["data"]
+        # akshare返回的格式是 {"项目": "内容"}，例如 {"股票简称": "三花智控"}
+        # 优先查找"股票简称"
+        if "股票简称" in info_data:
+            stock_name = str(info_data["股票简称"]).strip()
+        # 其次查找包含"名称"或"简称"的键
+        elif stock_name == "未知":
+            for key, value in info_data.items():
+                key_str = str(key).strip()
+                if "简称" in key_str or ("名称" in key_str and "全称" not in key_str):
+                    stock_name = str(value).strip()
+                    break
+        # 如果还是没找到，尝试查找任何包含"name"的键（英文）
+        if stock_name == "未知":
+            for key, value in info_data.items():
+                if "name" in str(key).lower():
+                    stock_name = str(value).strip()
+                    break
+    
     result = tool.get_stock_history(stock_code, start_date, end_date)
     
     if result["success"]:
         stats = result["statistics"]
+        latest_date_str = ""
+        try:
+            if "日期" in result["dataframe"].columns:
+                latest_date_str = str(result["dataframe"]["日期"].iloc[-1])
+        except Exception:
+            latest_date_str = ""
         return f"""
 股票代码: {result['stock_code']}
+股票名称: {stock_name}
 数据期间: {result['start_date']} 至 {result['end_date']}
+RANGE_CHECK: {result['start_date']}~{result['end_date']}
+LATEST_DATE: {latest_date_str}
 总交易日数: {stats['总交易日数']}
 平均收盘价: {stats['平均收盘价']:.2f}
 最高收盘价: {stats['最高收盘价']:.2f}
@@ -219,17 +257,25 @@ def get_stock_history_tool(stock_code: str, start_date: Optional[str] = None, en
 from crewai.tools import tool
 
 @tool("获取股票历史数据")
-def get_stock_history_tool_obj(stock_code: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> str:
+def get_stock_history_tool_obj(
+    stock_code: str, 
+    start_date: str = "", 
+    end_date: str = ""
+) -> str:
     """
-    获取股票历史交易数据，包括过去三年的每日开盘价、收盘价、最低价、最高价、量比、换手率等指标
+    获取股票历史交易数据，包括股票名称、过去三年的每日开盘价、收盘价、最低价、最高价、量比、换手率等指标。
+    此工具会自动获取股票的基本信息（包括股票名称），然后获取历史交易数据。
     
     Args:
-        stock_code: 股票代码（如：000001）
-        start_date: 开始日期，格式：YYYYMMDD（可选）
-        end_date: 结束日期，格式：YYYYMMDD（可选）
+        stock_code: 股票代码（如：000001），必需参数
+        start_date: 开始日期，格式：YYYYMMDD（可选，留空则默认三年前）
+        end_date: 结束日期，格式：YYYYMMDD（可选，留空则默认今天）
     
     Returns:
-        格式化的股票数据报告
+        格式化的股票数据报告，包含股票代码、股票名称、数据期间、统计信息和最近5个交易日数据
     """
+    # 将空字符串转换为None
+    start_date = None if not start_date or start_date.strip() == "" else start_date
+    end_date = None if not end_date or end_date.strip() == "" else end_date
     return get_stock_history_tool(stock_code, start_date, end_date)
 

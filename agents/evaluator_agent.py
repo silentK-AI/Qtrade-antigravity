@@ -3,7 +3,7 @@
 负责对分析决策结果进行评估并提供优化建议
 """
 from crewai import Agent, LLM
-from config import GEMINI_MODEL, GEMINI_API_KEY
+from config import GEMINI_FLASH_MODEL, GEMINI_API_KEY
 
 
 def create_evaluator_agent() -> Agent:
@@ -14,7 +14,7 @@ def create_evaluator_agent() -> Agent:
         配置好的评估智能体
     """
     llm = LLM(
-        model=GEMINI_MODEL,
+        model=GEMINI_FLASH_MODEL,
         temperature=0.2,
         api_key=GEMINI_API_KEY
     )

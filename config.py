@@ -6,18 +6,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# API配置 - Google Gemini
-# 注意：请通过环境变量或 .env 文件设置 GEMINI_API_KEY
-# 在 .env 文件中添加：GEMINI_API_KEY=your_api_key_here
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError(
-        "未设置 GEMINI_API_KEY 环境变量。"
-        "请在 .env 文件中设置 GEMINI_API_KEY，或使用环境变量。"
-    )
+# API配置 - 通过第三方API调用Gemini
+# 第三方API配置
+THIRD_PARTY_API_BASE_URL = os.getenv("THIRD_PARTY_API_BASE_URL", "https://hiapi.online/v1")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "sk-wIddyarusR7H9wZyxhxvecRXctBaafuNNvXBUuKMMyffTL0q")
 
 # 设置环境变量供 LiteLLM 和 CrewAI 使用
-os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+# 使用第三方API，需要设置OPENAI_API_KEY和API_BASE
+os.environ["OPENAI_API_KEY"] = GEMINI_API_KEY
+os.environ["OPENAI_API_BASE"] = THIRD_PARTY_API_BASE_URL
+
 # 设置 LiteLLM 的重试配置以避免 429 错误
 os.environ["LITELLM_NUM_RETRIES"] = "3"
 os.environ["LITELLM_RETRY_DELAY"] = "2"  # 重试延迟（秒）
@@ -25,14 +23,18 @@ os.environ["LITELLM_RETRY_DELAY"] = "2"  # 重试延迟（秒）
 # 禁用 CrewAI 的遥测和追踪功能（避免生成无法访问的链接）
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "1"
 os.environ["DO_NOT_TRACK"] = "1"
-# 注意：即使环境中存在 OPENAI_API_KEY，CrewAI 也会优先使用 Gemini（因为模型名称明确指定了 gemini/）
 
-# CrewAI 使用正确的 Gemini 模型名称
-# 注意：对于 LiteLLM，使用 gemini/ 前缀
-# 主模型：gemini-2.0-flash
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini/gemini-2.0-flash")
+# CrewAI 使用第三方API调用Gemini模型
+# 第三方API兼容OpenAI格式，使用openai/前缀
+# 分析决策智能体使用：gemini-2.5-pro-maxthinking（更强大的模型用于复杂分析）
+GEMINI_ANALYSIS_MODEL = os.getenv("GEMINI_ANALYSIS_MODEL", "openai/gemini-2.5-pro-maxthinking")
+# 其他智能体使用：gemini-2.5-flash（快速模型用于数据收集和资讯收集）
+GEMINI_FLASH_MODEL = os.getenv("GEMINI_FLASH_MODEL", "openai/gemini-2.5-flash")
 # 备用模型：当主模型遇到 429 错误时使用
-GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini/gemini-2.0-flash-live")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "openai/gemini-2.5-flash")
+# 为了向后兼容，保留GEMINI_MODEL（默认使用flash模型）
+_default_gemini_model = os.getenv("GEMINI_MODEL")
+GEMINI_MODEL = _default_gemini_model if _default_gemini_model else GEMINI_FLASH_MODEL
 
 # 数据源配置
 DATA_SOURCE = "akshare"  # 使用akshare获取中国股市数据

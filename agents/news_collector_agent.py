@@ -4,7 +4,7 @@
 """
 from crewai import Agent, LLM
 from tools.news_search_tool import search_stock_news_tool_obj
-from config import GEMINI_MODEL, GEMINI_API_KEY
+from config import GEMINI_FLASH_MODEL, GEMINI_API_KEY
 
 
 def create_news_collector_agent() -> Agent:
@@ -15,7 +15,7 @@ def create_news_collector_agent() -> Agent:
         配置好的资讯收集智能体
     """
     llm = LLM(
-        model=GEMINI_MODEL,
+        model=GEMINI_FLASH_MODEL,
         temperature=0.2,
         api_key=GEMINI_API_KEY
     )

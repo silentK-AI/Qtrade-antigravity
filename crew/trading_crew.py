@@ -9,6 +9,7 @@ from tasks.task_definitions import (
     create_analysis_task,
     create_evaluation_task
 )
+from utils.date_utils import format_prediction_date_desc, format_current_beijing_date
 
 
 def create_trading_crew(stock_code: str, start_date: str = None, end_date: str = None) -> Crew:
@@ -23,16 +24,19 @@ def create_trading_crew(stock_code: str, start_date: str = None, end_date: str =
     Returns:
         配置好的Crew实例
     """
+    # 获取预测日期描述
+    prediction_date_desc = format_prediction_date_desc()
+    
     # 创建任务
     data_task = create_data_collection_task(stock_code, start_date, end_date)
     news_task = create_news_collection_task(stock_code)
     
-    # 分析任务依赖于数据收集和资讯收集任务
-    analysis_task = create_analysis_task(stock_code)
+    # 分析任务依赖于数据收集和资讯收集任务，传入预测日期
+    analysis_task = create_analysis_task(stock_code, prediction_date_desc)
     analysis_task.context = [data_task, news_task]
     
-    # 评估任务依赖于分析任务
-    evaluation_task = create_evaluation_task(stock_code)
+    # 评估任务依赖于分析任务，传入当前北京时间作为报告日期
+    evaluation_task = create_evaluation_task(stock_code, report_date=format_current_beijing_date())
     evaluation_task.context = [analysis_task]
     
     # 创建Crew
@@ -103,12 +107,16 @@ def run_trading_analysis(stock_code: str, start_date: str = None, end_date: str 
                     create_analysis_task,
                     create_evaluation_task
                 )
+                from utils.date_utils import format_prediction_date_desc, format_current_beijing_date
+                
+                # 获取预测日期描述
+                prediction_date_desc = format_prediction_date_desc()
                 
                 data_task = create_data_collection_task(stock_code, start_date, end_date)
                 news_task = create_news_collection_task(stock_code)
-                analysis_task = create_analysis_task(stock_code)
+                analysis_task = create_analysis_task(stock_code, prediction_date_desc)
                 analysis_task.context = [data_task, news_task]
-                evaluation_task = create_evaluation_task(stock_code)
+                evaluation_task = create_evaluation_task(stock_code, report_date=format_current_beijing_date())
                 evaluation_task.context = [analysis_task]
                 
                 crew = Crew(

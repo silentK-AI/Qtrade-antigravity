@@ -85,3 +85,5 @@ python main.py --stock-code 000001
 3. **模型格式**：使用 `gemini/gemini-pro` 格式，不是 `gemini-pro`
 4. **工具装饰器**：必须使用 `crewai.tools.tool` 装饰器
 
+
+

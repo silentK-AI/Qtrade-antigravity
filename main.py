@@ -3,6 +3,7 @@
 使用CrewAI多智能体系统进行股票价格预测
 """
 import os
+import sys
 # 在导入 CrewAI 之前禁用遥测和追踪功能（避免生成无法访问的链接）
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "1"
 os.environ["DO_NOT_TRACK"] = "1"
@@ -12,6 +13,11 @@ import json
 from datetime import datetime
 from crew.trading_crew import run_trading_analysis
 from config import GEMINI_API_KEY
+from utils.pdf_generator import create_pdf_report
+from utils.date_utils import format_prediction_date_desc, get_beijing_time
+
+# 确保输出不被缓冲，立即显示
+sys.stdout.reconfigure(line_buffering=True)
 
 
 def main():
@@ -39,7 +45,13 @@ def main():
         "--output",
         type=str,
         default=None,
-        help="输出文件路径（可选，默认打印到控制台）"
+        help="输出JSON文件路径（可选，默认打印到控制台）"
+    )
+    parser.add_argument(
+        "--pdf",
+        type=str,
+        default=None,
+        help="输出PDF报告路径（可选，默认不生成PDF）"
     )
     
     args = parser.parse_args()
@@ -50,13 +62,18 @@ def main():
         print("请在.env文件中设置GEMINI_API_KEY，或使用环境变量")
         return
     
+    # 获取预测日期信息
+    beijing_time = get_beijing_time()
+    prediction_date_desc = format_prediction_date_desc()
+    
     print("=" * 80)
     print("量化交易工具 - 股票价格预测系统")
     print("=" * 80)
     print(f"股票代码: {args.stock_code}")
     print(f"开始日期: {args.start_date or '默认（三年前）'}")
     print(f"结束日期: {args.end_date or '默认（今天）'}")
-    print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"当前北京时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"预测日期: {prediction_date_desc}")
     print("=" * 80)
     print()
     
@@ -79,13 +96,32 @@ def main():
         
         # 输出结果
         if args.output:
-            # 保存到文件
+            # 保存到JSON文件
             with open(args.output, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2, default=str)
             print(f"结果已保存到: {args.output}")
-        else:
-            # 打印到控制台
-            print("分析结果:")
+        
+        # 生成PDF报告
+        pdf_path = args.pdf
+        if not pdf_path:
+            # 如果没有指定PDF路径，自动生成
+            stock_code = args.stock_code
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            pdf_path = f"report_{stock_code}_{timestamp}.pdf"
+        
+        print(f"正在生成PDF报告: {pdf_path}")
+        try:
+            create_pdf_report(result, pdf_path)
+            print(f"✓ PDF报告已生成: {pdf_path}")
+        except Exception as e:
+            print(f"⚠️  PDF报告生成失败: {str(e)}")
+            print("   但分析结果仍然可用")
+            import traceback
+            traceback.print_exc()
+        
+        # 如果没有指定输出文件，打印到控制台
+        if not args.output:
+            print("\n分析结果:")
             print("-" * 80)
             print(result.get("result", "无结果"))
             print("-" * 80)
@@ -113,4 +149,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
