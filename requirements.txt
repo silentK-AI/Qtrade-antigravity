@@ -1,16 +1,18 @@
-crewai[google-genai]>=0.28.0
-crewai-tools>=0.1.0
-litellm>=1.0.0
-akshare>=1.12.0
-pandas>=2.0.0
-numpy>=1.24.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
-python-dotenv>=1.0.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-scikit-learn>=1.3.0
-reportlab>=4.0.0
-pytz>=2023.3
+# ETF T+0 量化交易系统 - 依赖清单
+akshare>=1.14.0        # A股/ETF/期货行情数据
+# yfinance>=0.2.36     # (可选) 海外数据回退方案，需代理
+pandas>=2.0.0          # 数据处理
+numpy>=1.24.0          # 数值计算
+python-dotenv>=1.0.0   # 环境变量管理
+loguru>=0.7.0          # 结构化日志
+requests>=2.31.0       # HTTP 请求（通知模块）
+pytest>=7.4.0          # 测试框架
+flask>=3.0.0           # Dashboard Web 服务
+baostock>=0.8.8        # 历史行情数据（回测用）
+xgboost>=2.0.0         # XGBoost 价格预测模型
+scikit-learn>=1.3.0    # 特征处理和模型评估
+joblib>=1.3.0          # 模型序列化
 
+# 实盘交易（Windows 环境安装）:
+# easytrader>=0.20.0   # 同花顺自动交易
+# xtquant              # miniQMT SDK（备选方案）

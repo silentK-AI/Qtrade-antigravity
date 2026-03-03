@@ -44,12 +44,18 @@ ENV/
 *.csv
 *.xlsx
 *.json
-data/
+data_cache/
+
+# 日志目录
+logs/
 
 # 输出文件
 output/
 results/
 *.pdf
+
+# ML 模型
+models/
 
 # 系统文件
 .DS_Store

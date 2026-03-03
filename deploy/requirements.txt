@@ -1,0 +1,16 @@
+# Quati-Trade 云端部署依赖
+# 核心
+loguru>=0.7.0
+pandas>=2.0.0
+requests>=2.31.0
+flask>=3.0.0
+
+# 数据源
+baostock>=0.8.8
+
+# ML (可选)
+xgboost>=2.0.0
+scikit-learn>=1.3.0
+
+# 实盘交易 - 同花顺自动化
+easytrader>=0.22.0

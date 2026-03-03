@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETF T+0 交易监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-card: #1a1d2e;
+            --bg-card-hover: #222640;
+            --border: #2a2e45;
+            --text-primary: #e4e6f0;
+            --text-secondary: #8b8fa3;
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.15);
+            --green: #22c55e;
+            --green-bg: rgba(34, 197, 94, 0.1);
+            --red: #ef4444;
+            --red-bg: rgba(239, 68, 68, 0.1);
+            --orange: #f59e0b;
+            --radius: 12px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* ===== Header ===== */
+        .header {
+            background: linear-gradient(135deg, #1a1d2e 0%, #131525 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .header .subtitle {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        /* ===== Tabs ===== */
+        .nav-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 12px 32px;
+            background: var(--bg-primary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-tab {
+            padding: 8px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            border: none;
+            background: transparent;
+        }
+
+        .nav-tab:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        /* ===== Time Selector ===== */
+        .time-selector {
+            display: flex;
+            gap: 2px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 2px;
+            border-radius: 6px;
+        }
+
+        .time-btn {
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .time-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .time-btn.active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        /* ===== Mode Toggle ===== */
+        .mode-bar {
+            display: flex;
+            gap: 8px;
+            padding: 16px 32px 8px;
+            align-items: center;
+        }
+
+        .mode-bar label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-right: 4px;
+        }
+
+        .mode-btn {
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .mode-btn.active {
+            background: var(--accent-glow);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* ===== Content ===== */
+        .content {
+            padding: 16px 32px 32px;
+        }
+
+        /* ===== Metric Cards ===== */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            transition: all 0.2s;
+        }
+
+        .metric-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -1px;
+        }
+
+        .metric-sub {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .metric-value.positive {
+            color: var(--green);
+        }
+
+        .metric-value.negative {
+            color: var(--red);
+        }
+
+        /* ===== Charts ===== */
+        .chart-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .chart-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+        }
+
+        /* ===== Table ===== */
+        .table-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .table-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .table-header h3 {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(99, 102, 241, 0.03);
+        }
+
+        td {
+            padding: 12px 16px;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(42, 46, 69, 0.5);
+        }
+
+        tr:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .tag-buy {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+
+        .tag-sell {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+
+        /* ===== Filter Bar ===== */
+        .filter-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 12px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .filter-group label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .filter-input {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            outline: none;
+        }
+
+        .filter-input:focus {
+            border-color: var(--accent);
+        }
+
+        .filter-btn {
+            padding: 4px 12px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: #4f46e5;
+        }
+
+        /* ===== PnL Tabs ===== */
+        .pnl-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+        }
+
+        .pnl-tab {
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid var(--border);
+            transition: all 0.2s;
+        }
+
+        .pnl-tab:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .pnl-tab.active {
+            background: var(--accent-glow);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* ===== Page visibility ===== */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        /* ===== Empty State ===== */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+
+            .header,
+            .nav-tabs,
+            .mode-bar,
+            .content {
+                padding-left: 16px;
+                padding-right: 16px;
+            }
+
+            .metrics-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .metric-value {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <div>
+            <h1>ETF T+0 量化交易系统</h1>
+            <div class="subtitle">交易监控 Dashboard</div>
+        </div>
+        <!-- Global Date Filter Bar (Moved to Header) -->
+        <div class="filter-bar" style="margin-bottom: 0; padding: 4px 12px; background: rgba(255,255,255,0.03);">
+            <div class="filter-group">
+                <label>开始：</label>
+                <input type="date" id="startDate" class="filter-input"
+                    style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onkeydown="return false"
+                    onclick="this.showPicker()">
+            </div>
+            <div class="filter-group">
+                <label>结束：</label>
+                <input type="date" id="endDate" class="filter-input"
+                    style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onkeydown="return false"
+                    onclick="this.showPicker()">
+            </div>
+            <button class="filter-btn" onclick="loadPageData()" style="padding: 2px 8px; font-size: 12px;">筛选</button>
+            <button class="filter-btn" onclick="setAllDateRange()"
+                style="padding: 2px 8px; font-size: 12px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary);">全部</button>
+        </div>
+        <div style="font-size: 13px; color: var(--text-secondary);" id="updateTime"></div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+        <button class="nav-tab active" data-page="overview">📊 总览</button>
+        <button class="nav-tab" data-page="trades">📋 交易明细</button>
+        <button class="nav-tab" data-page="pnl">📈 盈亏统计</button>
+    </div>
+
+    <!-- Mode Toggle -->
+    <div class="mode-bar">
+        <label>交易模式：</label>
+        <button class="mode-btn active" data-mode="paper">📝 模拟盘</button>
+        <button class="mode-btn" data-mode="live">🔴 实盘</button>
+        <button class="mode-btn" data-mode="backtest">🔬 回测</button>
+    </div>
+
+    <!-- ===== Content ===== -->
+    <div class="content">
+        <!-- ===== Overview Page ===== -->
+        <div class="page active" id="page-overview">
+            <div class="metrics-grid" id="metricsGrid">
+                <div class="metric-card">
+                    <div class="metric-label">总收益</div>
+                    <div class="metric-value" id="totalPnl">--</div>
+                    <div class="metric-sub" id="totalPnlSub"></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">总交易笔数</div>
+                    <div class="metric-value" id="totalTrades">--</div>
+                    <div class="metric-sub" id="totalTradesSub"></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">胜率（天）</div>
+                    <div class="metric-value" id="winRate">--</div>
+                    <div class="metric-sub" id="winRateSub"></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">最大回撤</div>
+                    <div class="metric-value" id="maxDD">--</div>
+                    <div class="metric-sub" id="maxDDSub"></div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">交易天数</div>
+                    <div class="metric-value" id="totalDays">--</div>
+                    <div class="metric-sub" id="totalDaysSub"></div>
+                </div>
+            </div>
+
+            <div class="chart-container" style="margin-bottom: 25px;">
+                <div class="chart-title">📊 标的盈亏排名 (PnL Ranking)</div>
+                <div id="symbolStatsWrapper" style="padding: 15px; min-height: 100px;">
+                    <canvas id="symbolPnLRankingChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">📈 资金曲线</div>
+                <div class="chart-wrapper">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">📊 每日盈亏</div>
+                <div class="chart-wrapper">
+                    <canvas id="dailyPnlChart"></canvas>
+                </div>
+            </div>
+
+            <!-- ===== Real-time Charts ===== -->
+            <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                <label style="font-size: 13px; color: var(--text-secondary);">实时监控标的：</label>
+                <select id="etfSelector"
+                    style="background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 4px 12px; border-radius: 6px; font-size: 13px;">
+                    <option value="">载入中...</option>
+                </select>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div class="chart-container">
+                    <div class="chart-title"
+                        style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>⚡ 实时 Price & IOPV (5s) <span id="snapshotEtf1"
+                                style="color:var(--text-secondary); font-size:12px; font-weight:normal;"></span></div>
+                        <div class="time-selector">
+                            <button class="time-btn" onclick="setTimeWindow(10)" id="btn-10m">10m</button>
+                            <button class="time-btn" onclick="setTimeWindow(60)" id="btn-1h">1h</button>
+                            <button class="time-btn active" onclick="setTimeWindow(0)" id="btn-all">All</button>
+                        </div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="priceChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <div class="chart-title">🌊 实时期货动量 (5s) <span id="snapshotEtf2"
+                            style="color:var(--text-secondary); font-size:12px; font-weight:normal;"></span></div>
+                    <div class="chart-wrapper">
+                        <canvas id="momentumChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== Trades Page ===== -->
+        <div class="page" id="page-trades">
+            <div class="table-container">
+                <div class="table-header">
+                    <h3>交易记录</h3>
+                    <div style="font-size:13px; color:var(--text-secondary)" id="tradeCount"></div>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>标的</th>
+                                <th>方向</th>
+                                <th>价格</th>
+                                <th>数量</th>
+                                <th>金额</th>
+                                <th>触发策略</th>
+                                <th>盈亏</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesBody"></tbody>
+                    </table>
+                </div>
+                <div class="empty-state" id="tradesEmpty" style="display:none;">
+                    <div class="icon">📭</div>
+                    <p>暂无交易记录</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== PnL Page ===== -->
+        <div class="page" id="page-pnl">
+            <div class="pnl-tabs">
+                <button class="pnl-tab active" data-period="daily">每日</button>
+                <button class="pnl-tab" data-period="weekly">每周</button>
+                <button class="pnl-tab" data-period="monthly">每月</button>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title" id="pnlChartTitle">📊 每日盈亏</div>
+                <div class="chart-wrapper">
+                    <canvas id="pnlBarChart"></canvas>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <div class="table-header">
+                    <h3 id="pnlTableTitle">每日盈亏明细</h3>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr id="pnlTableHead"></tr>
+                        </thead>
+                        <tbody id="pnlTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== Global State =====
+        let currentMode = localStorage.getItem('dashboard_mode') || 'paper';
+        let currentPage = 'overview';
+        let currentPnlPeriod = 'daily';
+        let currentTimeWindow = 0; // 0 = All
+        let selectedEtf = '';
+        let charts = { symbolPnLs: {}, symbolRanking: null };
+
+        // ===== Navigation =====
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const page = tab.dataset.page;
+                currentPage = page;
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                document.getElementById('page-' + page).classList.add('active');
+                loadPageData();
+            });
+        });
+
+        // ===== Mode Toggle =====
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            if (btn.dataset.mode === currentMode) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentMode = btn.dataset.mode;
+                localStorage.setItem('dashboard_mode', currentMode);
+                loadPageData();
+            });
+        });
+
+        // ===== PnL Period Toggle =====
+        document.querySelectorAll('.pnl-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.pnl-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentPnlPeriod = tab.dataset.period;
+                loadPnlPage();
+            });
+        });
+
+        // ===== ETF Selector =====
+        document.getElementById('etfSelector').addEventListener('change', (e) => {
+            selectedEtf = e.target.value;
+            loadSnapshots();
+        });
+
+        // ===== Data Loading =====
+        function loadPageData() {
+            if (currentPage === 'overview') {
+                loadOverview();
+                loadSnapshots(); // 首次加载实时快照
+            }
+            else if (currentPage === 'trades') loadTrades();
+            else if (currentPage === 'pnl') loadPnlPage();
+        }
+
+        // 5秒自动刷新循环
+        setInterval(() => {
+            if (currentPage === 'overview') {
+                loadOverview();
+                loadSnapshots();
+            }
+        }, 5000);
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 设置默认日期：过去7天到今天
+            const now = new Date();
+            const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+            // 如果 URL 参数或 localStorage 没指定日期，使用默认
+            if (!document.getElementById('startDate').value) {
+                document.getElementById('startDate').value = lastWeek.toISOString().split('T')[0];
+            }
+            if (!document.getElementById('endDate').value) {
+                document.getElementById('endDate').value = now.toISOString().split('T')[0];
+            }
+
+            // 同步 UI 状态 (Mode 已在 script 顶部逻辑处理)
+            loadPageData();
+            updateTime();
+        });
+
+        function setAllDateRange() {
+            document.getElementById('startDate').value = '2024-01-01'; // 足够早
+            const now = new Date();
+            document.getElementById('endDate').value = now.toISOString().split('T')[0];
+            loadPageData();
+        }
+
+        function updateTime() {
+            document.getElementById('updateTime').textContent =
+                '更新于 ' + new Date().toLocaleString('zh-CN');
+        }
+
+        async function fetchJson(url) {
+            const res = await fetch(url);
+            return res.json();
+        }
+
+        // ===== Overview =====
+        async function loadOverview() {
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
+            const query = `mode=${currentMode}&start=${start}&end=${end}`;
+
+            const summary = await fetchJson(`/api/summary?${query}`);
+            const equity = await fetchJson(`/api/equity?${query}`);
+            const daily = await fetchJson(`/api/pnl/daily?${query}`);
+
+            const symbolStats = await fetchJson(`/api/symbol_stats?${query}`);
+
+            // Metrics
+            const pnl = summary.total_pnl || 0;
+            const cls = pnl >= 0 ? 'positive' : 'negative';
+            document.getElementById('totalPnl').className = `metric-value ${cls}`;
+            document.getElementById('totalPnl').textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(3);
+
+            document.getElementById('totalTrades').textContent = summary.total_trades || 0;
+            document.getElementById('totalTradesSub').textContent =
+                `盈: ${summary.total_wins || 0} | 亏: ${summary.total_loses || 0}`;
+
+            document.getElementById('winRate').textContent =
+                summary.total_trades > 0 ? summary.trade_win_rate + '%' : '--';
+            document.getElementById('winRateSub').textContent =
+                `盈: ${summary.total_wins || 0} / 亏: ${summary.total_loses || 0}`;
+
+            document.getElementById('maxDD').className = 'metric-value negative';
+            document.getElementById('maxDD').textContent =
+                summary.max_drawdown > 0 ? '-' + summary.max_drawdown + '%' : '0%';
+
+            document.getElementById('totalDays').textContent = summary.total_days || 0;
+            document.getElementById('totalDaysSub').textContent =
+                summary.first_date && summary.last_date
+                    ? `${summary.first_date} ~ ${summary.last_date}` : '';
+
+            // Symbol specific stats
+            renderSymbolStats(symbolStats);
+
+            // Equity Chart
+            renderEquityChart(equity);
+            // Daily PnL Chart
+            renderDailyPnlChart(daily);
+
+            // 如果回测模式且没数据，尝试自动调整时间范围
+            if (currentMode === 'backtest' && (!equity || equity.length === 0) && summary.total_days === 0) {
+                console.log("回测模式无数据，尝试扩展时间范围...");
+                // 这里可以进一步实现自动获取最早记录时间的逻辑，目前手动点击“全部”即可
+            }
+        }
+
+        // ===== Real-time Snapshots =====
+        async function loadSnapshots() {
+            if (!selectedEtf) {
+                // 初始化加载，获取上次选中的或默认
+                const config = await fetchJson('/api/config');
+                const selector = document.getElementById('etfSelector');
+                selector.innerHTML = config.etfs.map(e => `<option value="${e.code}">${e.code} ${e.name}</option>`).join('');
+
+                selectedEtf = selector.value;
+            }
+
+            const etfCode = selectedEtf;
+            document.getElementById('snapshotEtf1').textContent = `[${etfCode}]`;
+            document.getElementById('snapshotEtf2').textContent = `[${etfCode}]`;
+
+            let limit = 3000;
+            if (currentTimeWindow > 0) {
+                if (currentMode === 'backtest') {
+                    // 回测模式：5分钟一个点
+                    limit = currentTimeWindow / 5;
+                } else {
+                    // 实盘/模拟模式：5秒一次扫描 (每分钟12个点)
+                    limit = currentTimeWindow * 12;
+                }
+            }
+
+            const data = await fetchJson(`/api/snapshots?mode=${currentMode}&etf_code=${etfCode}&limit=${limit}`);
+            if (!data || data.length === 0) return;
+
+            renderPriceChart(data);
+            renderMomentumChart(data);
+        }
+
+        function setTimeWindow(minutes) {
+            currentTimeWindow = minutes;
+            // Update UI
+            document.querySelectorAll('.time-btn').forEach(btn => btn.classList.remove('active'));
+            if (minutes === 10) document.getElementById('btn-10m').classList.add('active');
+            else if (minutes === 60) document.getElementById('btn-1h').classList.add('active');
+            else document.getElementById('btn-all').classList.add('active');
+
+            loadSnapshots();
+        }
+
+        function renderPriceChart(data) {
+            const ctx = document.getElementById('priceChart');
+            if (charts.price) charts.price.destroy();
+
+            charts.price = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.timestamp.substring(11, 19)),
+                    datasets: [
+                        {
+                            label: 'Price',
+                            data: data.map(d => d.price),
+                            borderColor: '#3b82f6',
+                            backgroundColor: '#3b82f6',
+                            borderWidth: 2,
+                            pointRadius: data.map(d => d.trade_side ? 6 : 0),
+                            pointBackgroundColor: data.map(d => d.trade_side === 'BUY' ? '#10b981' : d.trade_side === 'SELL' ? '#ef4444' : '#3b82f6'),
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            tension: 0.1,
+                            fill: false
+                        },
+                        {
+                            label: 'IOPV',
+                            data: data.map(d => d.iopv),
+                            borderColor: '#f59e0b',
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            borderDash: [5, 5],
+                            tension: 0.1,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    spanGaps: true, // Handle missing data points
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', labels: { boxWidth: 12, color: '#8b8fa3' } },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) label += context.parsed.y.toFixed(3);
+
+                                    const d = data[context.dataIndex];
+                                    if (d.trade_side && context.datasetIndex === 0) {
+                                        label += ` [${d.trade_side === 'BUY' ? '买入' : '卖出'} @ ${d.trade_price}]`;
+                                    }
+                                    return label;
+                                },
+                                afterLabel: function (context) {
+                                    const d = data[context.dataIndex];
+                                    if (d.trade_side && context.datasetIndex === 0 && d.trade_reason) {
+                                        return `原因: ${d.trade_reason}`;
+                                    }
+                                    return null;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#8b8fa3', maxTicksLimit: 10 }, grid: { color: 'rgba(42,46,69,0.2)' } },
+                        y: {
+                            ticks: {
+                                color: '#8b8fa3',
+                                callback: function (value) { return value.toFixed(3); }
+                            },
+                            grid: { color: 'rgba(42,46,69,0.5)' },
+                            grace: '5%' // Add some margin to see movement
+                        }
+                    },
+                    elements: {
+                        line: {
+                            borderJoinStyle: 'round'
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderMomentumChart(data) {
+            const ctx = document.getElementById('momentumChart');
+            if (charts.momentum) charts.momentum.destroy();
+
+            charts.momentum = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.timestamp.substring(11, 19)),
+                    datasets: [
+                        {
+                            label: '期货动量',
+                            data: data.map(d => d.momentum * 100),
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34,197,94,0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            pointRadius: 0,
+                            tension: 0.2,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: { ticks: { display: false }, grid: { display: false } },
+                        y: {
+                            ticks: { color: '#8b8fa3', font: { size: 10 }, callback: v => v.toFixed(3) + '%' },
+                            grid: { color: 'rgba(42,46,69,0.3)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderSymbolStats(stats) {
+            const canvas = document.getElementById('symbolPnLRankingChart');
+            if (charts.symbolRanking) charts.symbolRanking.destroy();
+
+            if (!stats || stats.length === 0) {
+                document.getElementById('symbolStatsWrapper').innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 20px;">暂无标的交易数据</div>';
+                return;
+            }
+
+            // 对数据按盈亏排序
+            stats.sort((a, b) => b.total_pnl - a.total_pnl);
+
+            const labels = stats.map(s => `${s.code} ${s.name}`);
+            const data = stats.map(s => s.total_pnl);
+            const colors = stats.map(s => s.total_pnl >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)');
+            const borderColors = stats.map(s => s.total_pnl >= 0 ? '#22c55e' : '#ef4444');
+
+            // 动态调整 Canvas 高度
+            const minHeight = 40 * stats.length + 50;
+            canvas.style.height = minHeight + 'px';
+
+            charts.symbolRanking = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '总盈亏',
+                        data: data,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        maxBarThickness: 30
+                    }]
+                },
+                options: {
+                    indexAxis: 'y', // 水平条形图
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    return ` 盈亏: ${context.parsed.x.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(42,46,69,0.3)', zeroLineColor: '#fff', drawTicks: true },
+                            ticks: { color: '#8b8fa3' }
+                        },
+                        y: {
+                            grid: { display: false },
+                            ticks: { color: '#e4e6f0', font: { weight: 'bold' } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderEquityChart(data) {
+            const ctx = document.getElementById('equityChart');
+            if (charts.equity) charts.equity.destroy();
+
+            if (!data || data.length === 0) {
+                charts.equity = null;
+                return;
+            }
+
+            charts.equity = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.date),
+                    datasets: [{
+                        label: '总资产',
+                        data: data.map(d => d.assets),
+                        borderColor: '#6366f1',
+                        backgroundColor: 'rgba(99,102,241,0.08)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1a1d2e',
+                            titleColor: '#e4e6f0',
+                            bodyColor: '#e4e6f0',
+                            borderColor: '#2a2e45',
+                            borderWidth: 1,
+                        }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#8b8fa3', maxTicksLimit: 10 }, grid: { color: 'rgba(42,46,69,0.5)' } },
+                        y: {
+                            ticks: { color: '#8b8fa3', callback: v => v.toLocaleString() },
+                            grid: { color: 'rgba(42,46,69,0.5)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderDailyPnlChart(data) {
+            const ctx = document.getElementById('dailyPnlChart');
+            if (charts.dailyPnl) charts.dailyPnl.destroy();
+
+            if (!data || data.length === 0) {
+                charts.dailyPnl = null;
+                return;
+            }
+
+            charts.dailyPnl = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(d => d.date),
+                    datasets: [{
+                        label: '日盈亏',
+                        data: data.map(d => d.pnl),
+                        backgroundColor: data.map(d => d.pnl >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+                        borderRadius: 4,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1a1d2e',
+                            titleColor: '#e4e6f0',
+                            bodyColor: '#e4e6f0',
+                            borderColor: '#2a2e45',
+                            borderWidth: 1,
+                        }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#8b8fa3', maxTicksLimit: 15 }, grid: { display: false } },
+                        y: { ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(42,46,69,0.5)' } }
+                    }
+                }
+            });
+        }
+
+        // ===== Trades =====
+        async function loadTrades() {
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
+            const trades = await fetchJson(`/api/trades?mode=${currentMode}&start=${start}&end=${end}`);
+            const tbody = document.getElementById('tradesBody');
+            const empty = document.getElementById('tradesEmpty');
+            const count = document.getElementById('tradeCount');
+
+            if (!trades || trades.length === 0) {
+                tbody.innerHTML = '';
+                empty.style.display = 'block';
+                count.textContent = '';
+                return;
+            }
+
+            empty.style.display = 'none';
+            count.textContent = `共 ${trades.length} 笔`;
+
+            tbody.innerHTML = trades.map(t => {
+                const isBuy = t.side === 'BUY';
+                const pnlCls = t.pnl > 0 ? 'positive' : t.pnl < 0 ? 'negative' : '';
+                const pnlText = t.side === 'SELL' ? (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(3) : '--';
+                return `<tr>
+            <td>${t.timestamp.replace('T', ' ').substring(0, 19)}</td>
+            <td>${t.etf_code} ${t.etf_name}</td>
+            <td><span class="tag ${isBuy ? 'tag-buy' : 'tag-sell'}">${isBuy ? '买入' : '卖出'}</span></td>
+            <td>${t.price.toFixed(3)}</td>
+            <td>${t.quantity.toLocaleString()}</td>
+            <td>${t.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td style="color: var(--text-secondary); font-size: 11px;">${t.reason || '--'}</td>
+            <td class="${pnlCls}">${pnlText}</td>
+        </tr>`;
+            }).join('');
+        }
+
+        // ===== PnL Page =====
+        async function loadPnlPage() {
+            const periodLabel = { daily: '每日', weekly: '每周', monthly: '每月' };
+            document.getElementById('pnlChartTitle').textContent = `📊 ${periodLabel[currentPnlPeriod]}盈亏`;
+            document.getElementById('pnlTableTitle').textContent = `${periodLabel[currentPnlPeriod]}盈亏明细`;
+
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
+            const data = await fetchJson(`/api/pnl/${currentPnlPeriod}?mode=${currentMode}&start=${start}&end=${end}`);
+            renderPnlBarChart(data);
+            renderPnlTable(data);
+        }
+
+        function renderPnlBarChart(data) {
+            const ctx = document.getElementById('pnlBarChart');
+            if (charts.pnlBar) charts.pnlBar.destroy();
+
+            if (!data || data.length === 0) {
+                charts.pnlBar = null;
+                return;
+            }
+
+            const labels = data.map(d => d.date || d.week || d.month);
+            const values = data.map(d => d.pnl);
+
+            charts.pnlBar = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '盈亏',
+                        data: values,
+                        backgroundColor: values.map(v => v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+                        borderRadius: 4,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#8b8fa3', maxTicksLimit: 15 }, grid: { display: false } },
+                        y: { ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(42,46,69,0.5)' } }
+                    }
+                }
+            });
+        }
+
+        function renderPnlTable(data) {
+            const head = document.getElementById('pnlTableHead');
+            const body = document.getElementById('pnlTableBody');
+
+            if (!data || data.length === 0) {
+                head.innerHTML = '';
+                body.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text-secondary)">暂无数据</td></tr>';
+                return;
+            }
+
+            if (currentPnlPeriod === 'daily') {
+                head.innerHTML = '<th>日期</th><th>起始资产</th><th>结束资产</th><th>盈亏</th><th>盈亏%</th><th>交易笔数</th>';
+                body.innerHTML = data.map(d => {
+                    const cls = d.pnl > 0 ? 'positive' : d.pnl < 0 ? 'negative' : '';
+                    return `<tr>
+                <td>${d.date}</td>
+                <td>${d.start_assets.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                <td>${d.end_assets.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                <td class="${cls}">${d.pnl >= 0 ? '+' : ''}${d.pnl.toFixed(3)}</td>
+                <td class="${cls}">${d.pnl_pct >= 0 ? '+' : ''}${d.pnl_pct.toFixed(2)}%</td>
+                <td>${d.trade_count}</td>
+            </tr>`;
+                }).join('');
+            } else {
+                const label = currentPnlPeriod === 'weekly' ? '周' : '月';
+                const key = currentPnlPeriod === 'weekly' ? 'week' : 'month';
+                head.innerHTML = `<th>${label}</th><th>盈亏</th><th>交易笔数</th><th>盈利笔数</th><th>亏损笔数</th>`;
+                body.innerHTML = data.map(d => {
+                    const cls = d.pnl > 0 ? 'positive' : d.pnl < 0 ? 'negative' : '';
+                    return `<tr>
+                <td>${d[key]}</td>
+                <td class="${cls}">${d.pnl >= 0 ? '+' : ''}${d.pnl.toFixed(3)}</td>
+                <td>${d.trade_count}</td>
+                <td class="positive">${d.win_trades}</td>
+                <td class="negative">${d.lose_trades}</td>
+            </tr>`;
+                }).join('');
+            }
+        }
+
+        // ===== Init =====
+        document.getElementById('updateTime').textContent =
+            '更新于 ' + new Date().toLocaleString('zh-CN');
+
+        loadPageData();
+    </script>
+</body>
+
+</html>
