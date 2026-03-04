@@ -45,42 +45,33 @@ class MLPredictor:
       3. 输出次日最高价/最低价预测
     """
 
-    # 特征列名（保证训练和预测一致）
+    # 特征列名 (12 维独立特征，基于相关性分析筛选)
+    #
+    # 筛选原则: 从原 30 个特征中，按"独立不相关性"保留每组中
+    # 重要性最高的代表特征。移除的原因包括:
+    #   - 10 个零方差特征 (隔夜/溢价率在训练中无数据)
+    #   - 8 个高相关冗余特征 (|r|>0.7)
     FEATURE_NAMES = [
-        # ---- 隔夜指标 (7) ----
-        "overnight_change_pct",       # 隔夜涨跌幅
-        "overnight_gap_up",           # 缺口方向 UP (1/0)
-        "overnight_gap_down",         # 缺口方向 DOWN (1/0)
-        "overnight_momentum_score",   # 动量评分
-        "overnight_range_pct",        # 隔夜波幅 (high-low)/close
-        "overnight_volume_ratio",     # 成交量相对比
-        "overnight_close_vs_high",    # 收盘位置（靠近最高/最低）
-        # ---- ETF 前 1 日行情 (6) ----
-        "prev_return",                # 前日涨跌幅
-        "prev_amplitude",             # 前日振幅
-        "prev_volume_ratio",          # 前日成交量比
-        "prev_high_low_ratio",        # 前日最高/最低
-        "prev_close_position",        # 收盘在 high-low 中的位置
-        "prev_body_ratio",            # 实体/振幅比
-        # ---- 多日统计 (9) ----
-        "return_3d",                  # 3 日累计收益
-        "return_5d",                  # 5 日累计收益
-        "volatility_5d",             # 5 日波动率
-        "volatility_10d",            # 10 日波动率
-        "ma5_deviation",             # MA5 偏离度
-        "ma10_deviation",            # MA10 偏离度
-        "ma20_deviation",            # MA20 偏离度
-        "atr_5d",                    # 5 日 ATR
-        "rsi_14d",                   # 14 日 RSI
-        # ---- 新增维度 (8) ----
-        "premium_rate_avg_5d",       # 5 日平均折溢价率
-        "premium_rate_std_5d",       # 5 日折溢价波动
-        "overnight_gap_pct",         # 隔夜缺口幅度
-        "day_of_week",               # 星期几 (0=周一 ... 4=周五)
-        "amplitude_ma5",             # 5 日平均振幅
-        "volume_ma5_ratio",          # 量比 (当日量/5日均量)
-        "upper_shadow_pct",          # 上影线占比
-        "lower_shadow_pct",          # 下影线占比
+        # ---- 隔夜 (1) ----
+        "overnight_change_pct",       # 隔夜涨跌幅 (代表全部隔夜信息)
+        # ---- 前日 K 线形态 (3) ----
+        "prev_return",                # 前日涨跌幅 (日动量)
+        "prev_close_position",        # 收盘在 high-low 中的位置 (K线重心)
+        "prev_body_ratio",            # 实体/振幅比 (K线形状)
+        # ---- 多日趋势 (2) ----
+        "return_5d",                  # 5 日累计收益 (中期趋势)
+        "ma5_deviation",              # MA5 偏离度 (均值回归信号, imp=0.10)
+        # ---- 波动率 (1) ----
+        "atr_5d",                     # 5 日 ATR (imp=0.18, 最高)
+        # ---- 技术指标 (1) ----
+        "rsi_14d",                    # 14 日 RSI (超买超卖)
+        # ---- 日历 (1) ----
+        "day_of_week",                # 星期几 (0=周一 ... 4=周五)
+        # ---- 量能 (1) ----
+        "volume_ma5_ratio",           # 量比 (当日量/5日均量)
+        # ---- 微观结构 (2) ----
+        "upper_shadow_pct",           # 上影线占比 (卖压)
+        "lower_shadow_pct",           # 下影线占比 (买压)
     ]
 
     def __init__(self, model_dir: str = "models"):
@@ -311,14 +302,14 @@ class MLPredictor:
         hist_df: pd.DataFrame,
     ) -> Optional[np.ndarray]:
         """
-        构建特征向量。
+        构建 12 维独立特征向量。
 
         Args:
             overnight_info: 隔夜行情信息
             hist_df:        至少 15 行的 OHLCV 历史数据
 
         Returns:
-            特征向量 (shape: [n_features,]) 或 None
+            特征向量 (shape: [12,]) 或 None
         """
         if len(hist_df) < 15:
             return None
@@ -335,36 +326,6 @@ class MLPredictor:
             if close <= 0:
                 return None
 
-            features = []
-
-            # ===== 隔夜指标 (7) =====
-            if overnight_info and overnight_info.is_valid:
-                features.append(overnight_info.overnight_change_pct)
-                features.append(1.0 if overnight_info.gap_direction == "UP" else 0.0)
-                features.append(1.0 if overnight_info.gap_direction == "DOWN" else 0.0)
-                features.append(overnight_info.momentum_score)
-
-                # 波幅
-                if overnight_info.prev_close > 0:
-                    range_pct = (overnight_info.overnight_high - overnight_info.overnight_low) / overnight_info.prev_close * 100
-                else:
-                    range_pct = 0.0
-                features.append(range_pct)
-
-                # 成交量比（相对的，0/1 简化）
-                features.append(1.0 if overnight_info.overnight_volume > 0 else 0.0)
-
-                # 收盘位置
-                ov_range = overnight_info.overnight_high - overnight_info.overnight_low
-                if ov_range > 0:
-                    close_pos = (overnight_info.overnight_price - overnight_info.overnight_low) / ov_range
-                else:
-                    close_pos = 0.5
-                features.append(close_pos)
-            else:
-                features.extend([0.0] * 7)
-
-            # ===== ETF 前 1 日行情 (6) =====
             prev = hist_df.iloc[-1]
             prev2 = hist_df.iloc[-2] if len(hist_df) >= 2 else prev
 
@@ -372,63 +333,44 @@ class MLPredictor:
             prev_open = float(prev["开盘"])
             prev_high = float(prev["最高"])
             prev_low = float(prev["最低"])
-            prev_volume = float(prev["成交量"])
             prev2_close = float(prev2["收盘"])
-            prev2_volume = float(prev2["成交量"])
 
-            # 前日涨跌幅
-            prev_return = (prev_close - prev2_close) / prev2_close if prev2_close > 0 else 0
-            features.append(prev_return * 100)
-
-            # 前日振幅
-            prev_amp = (prev_high - prev_low) / prev_close * 100 if prev_close > 0 else 0
-            features.append(prev_amp)
-
-            # 前日成交量比
-            vol_ratio = prev_volume / prev2_volume if prev2_volume > 0 else 1.0
-            features.append(vol_ratio)
-
-            # 前日最高/最低比
-            hl_ratio = prev_high / prev_low if prev_low > 0 else 1.0
-            features.append(hl_ratio)
-
-            # 收盘在 high-low 中的位置
-            hl_range = prev_high - prev_low
-            close_pos = (prev_close - prev_low) / hl_range if hl_range > 0 else 0.5
-            features.append(close_pos)
-
-            # 实体/振幅比
-            body = abs(prev_close - prev_open)
-            body_ratio = body / hl_range if hl_range > 0 else 0
-            features.append(body_ratio)
-
-            # ===== 多日统计 (9) =====
             closes = hist_df["收盘"].astype(float).values
             highs = hist_df["最高"].astype(float).values
             lows = hist_df["最低"].astype(float).values
 
-            # 3 日/5 日累计收益
-            ret_3d = (closes[-1] / closes[-4] - 1) * 100 if len(closes) >= 4 and closes[-4] > 0 else 0
+            hl_range = prev_high - prev_low
+
+            features = []
+
+            # 1. overnight_change_pct — 隔夜涨跌幅
+            if overnight_info and overnight_info.is_valid:
+                features.append(overnight_info.overnight_change_pct)
+            else:
+                features.append(0.0)
+
+            # 2. prev_return — 前日涨跌幅 (%)
+            prev_return = (prev_close - prev2_close) / prev2_close * 100 if prev2_close > 0 else 0
+            features.append(prev_return)
+
+            # 3. prev_close_position — 收盘在 high-low 中的位置 (0~1)
+            close_pos = (prev_close - prev_low) / hl_range if hl_range > 0 else 0.5
+            features.append(close_pos)
+
+            # 4. prev_body_ratio — 实体/振幅比
+            body = abs(prev_close - prev_open)
+            body_ratio = body / hl_range if hl_range > 0 else 0
+            features.append(body_ratio)
+
+            # 5. return_5d — 5 日累计收益 (%)
             ret_5d = (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 and closes[-6] > 0 else 0
-            features.append(ret_3d)
             features.append(ret_5d)
 
-            # 波动率
-            returns = pd.Series(closes).pct_change().dropna()
-            vol_5d = float(returns.tail(5).std() * 100) if len(returns) >= 5 else 0
-            vol_10d = float(returns.tail(10).std() * 100) if len(returns) >= 10 else 0
-            features.append(vol_5d)
-            features.append(vol_10d)
-
-            # MA 偏离度
+            # 6. ma5_deviation — MA5 偏离度 (%)
             ma5 = float(pd.Series(closes).tail(5).mean())
-            ma10 = float(pd.Series(closes).tail(10).mean())
-            ma20 = float(pd.Series(closes).tail(20).mean())
             features.append((close - ma5) / ma5 * 100 if ma5 > 0 else 0)
-            features.append((close - ma10) / ma10 * 100 if ma10 > 0 else 0)
-            features.append((close - ma20) / ma20 * 100 if ma20 > 0 else 0)
 
-            # ATR 5 日
+            # 7. atr_5d — 5 日 ATR (% of close)
             tr_list = []
             for j in range(max(1, len(hist_df) - 5), len(hist_df)):
                 h = float(highs[j])
@@ -439,30 +381,12 @@ class MLPredictor:
             atr = np.mean(tr_list) / close * 100 if close > 0 and tr_list else 0
             features.append(atr)
 
-            # RSI 14 日
+            # 8. rsi_14d — 14 日 RSI
             rsi = self._calc_rsi(closes, 14)
             features.append(rsi)
 
-            # ===== 新增维度 (8) =====
-            # 折溢价率统计（如果历史数据中有 premium_rate 列）
-            if "溢价率" in hist_df.columns:
-                prem = hist_df["溢价率"].astype(float).values
-                prem_5 = prem[-5:] if len(prem) >= 5 else prem
-                features.append(float(np.mean(prem_5)) * 100)
-                features.append(float(np.std(prem_5)) * 100 if len(prem_5) > 1 else 0.0)
-            else:
-                features.extend([0.0, 0.0])
-
-            # 隔夜缺口幅度
-            if overnight_info and overnight_info.is_valid and overnight_info.prev_close > 0:
-                gap_pct = (overnight_info.overnight_price - overnight_info.prev_close) / overnight_info.prev_close * 100
-            else:
-                gap_pct = 0.0
-            features.append(gap_pct)
-
-            # 星期几
+            # 9. day_of_week — 星期几
             try:
-                # 从 hist_df 推断日期
                 if "日期" in hist_df.columns:
                     day_of_week = pd.to_datetime(hist_df.iloc[-1]["日期"]).weekday()
                 else:
@@ -472,22 +396,17 @@ class MLPredictor:
                 day_of_week = 0
             features.append(float(day_of_week))
 
-            # 5 日平均振幅
-            amplitudes = (highs - lows) / closes * 100
-            amp_5 = amplitudes[-5:] if len(amplitudes) >= 5 else amplitudes
-            features.append(float(np.mean(amp_5)))
-
-            # 量比
+            # 10. volume_ma5_ratio — 量比
             volumes = hist_df["成交量"].astype(float).values
             vol_5_avg = float(np.mean(volumes[-5:])) if len(volumes) >= 5 else float(np.mean(volumes))
             vol_current = float(volumes[-1]) if len(volumes) > 0 else 0
             features.append(vol_current / vol_5_avg if vol_5_avg > 0 else 1.0)
 
-            # 上影线占比 = (high - max(open, close)) / (high - low)
+            # 11. upper_shadow_pct — 上影线占比
             upper_shadow = (prev_high - max(prev_open, prev_close)) / hl_range if hl_range > 0 else 0
             features.append(upper_shadow)
 
-            # 下影线占比 = (min(open, close) - low) / (high - low)
+            # 12. lower_shadow_pct — 下影线占比
             lower_shadow = (min(prev_open, prev_close) - prev_low) / hl_range if hl_range > 0 else 0
             features.append(lower_shadow)
 

@@ -397,9 +397,10 @@ class TradingEngine:
         self._overnight_loaded = True
 
     def _generate_ml_predictions(self, overnight_map: dict) -> None:
-        """使用 ML 模型生成当日价格预测"""
+        """使用 ML 模型生成当日价格预测并计算 PP 点位"""
         from strategy.ml_predictor import PricePrediction
         predictions = {}
+        pp_levels = {}
 
         for code in self._etf_codes:
             if not self._ml_predictor.has_model(code):
@@ -409,24 +410,40 @@ class TradingEngine:
                 # 获取最近 30 天历史数据用于特征构建
                 hist_df = self._fetch_recent_history(code, days=30)
                 if hist_df is None or len(hist_df) < 20:
-                    logger.debug(f"[{code}] 历史数据不足，跳过ML预测")
+                    logger.debug(f"[{code}] 历史数据不足，跳过ML预测和PP计算")
                     continue
+                
+                # --- 计算 PP 点位 ---
+                prev_row = hist_df.iloc[-1]
+                prev_high = float(prev_row["最高"])
+                prev_low = float(prev_row["最低"])
+                prev_close = float(prev_row["收盘"])
+                
+                if prev_high > 0 and prev_low > 0 and prev_close > 0:
+                    pp = (prev_high + prev_low + prev_close) / 3
+                    r1 = 2 * pp - prev_low
+                    s1 = 2 * pp - prev_high
+                    r2 = pp + (prev_high - prev_low)
+                    s2 = pp - (prev_high - prev_low)
+                    pp_levels[code] = {
+                        "PP": pp, "R1": r1, "S1": s1, "R2": r2, "S2": s2
+                    }
 
+                # --- 运行 ML 模型 ---
                 overnight_info = overnight_map.get(code)
                 pred = self._ml_predictor.predict(code, overnight_info, hist_df)
                 if pred:
                     # 预测是相对比率，转为绝对价格
-                    last_close = float(hist_df.iloc[-1]["收盘"])
-                    pred.predicted_high *= last_close
-                    pred.predicted_low *= last_close
+                    pred.predicted_high *= prev_close
+                    pred.predicted_low *= prev_close
                     predictions[code] = pred
 
             except Exception as e:
-                logger.debug(f"[{code}] ML预测生成失败: {e}")
+                logger.debug(f"[{code}] 策略数据生成失败: {e}")
 
-        if predictions:
-            self._ml_strategy.set_daily_predictions(predictions)
-            logger.info(f"ML预测完成: {len(predictions)} 个标的")
+        if predictions and pp_levels:
+            self._ml_strategy.set_daily_data(predictions, pp_levels)
+            logger.info(f"ML+PP数据生成完成: {len(predictions)} 个标的")
 
     def _fetch_recent_history(self, etf_code: str, days: int = 30):
         """获取最近 N 天历史数据（使用直连 EM API，绕过代理）"""
@@ -516,8 +533,8 @@ def main():
 
     parser.add_argument(
         "mode",
-        choices=["paper", "live", "backtest", "dashboard", "train"],
-        help="运行模式: paper(模拟) / live(实盘) / backtest(回测) / dashboard(监控后台) / train(训练ML模型)",
+        choices=["paper", "live", "backtest", "ml-backtest", "dashboard", "train"],
+        help="运行模式: paper(模拟) / live(实盘) / backtest(回测) / ml-backtest(ML策略回测) / dashboard(监控后台) / train(训练ML模型)",
     )
     parser.add_argument(
         "--etf",
@@ -597,6 +614,16 @@ def main():
             start_date=args.start_date,
             end_date=args.end_date,
             days=args.days
+        )
+        sys.exit(0)
+
+    if args.mode == "ml-backtest":
+        from backtest.ml_backtester import run_ml_backtest
+        run_ml_backtest(
+            etf_codes=etf_codes,
+            initial_capital=args.capital,
+            test_days=args.days,
+            train_days=150,
         )
         sys.exit(0)
 

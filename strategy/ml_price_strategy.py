@@ -1,10 +1,10 @@
 """
-ML 价格预测策略（区间交易版）
+ML 价格预测策略（PP 混合区间版）
 
-基于 XGBoost 模型预测的当日最高价/最低价，在价格接近预测边界时触发交易。
-
-买入逻辑: 价格进入"预测低点区间" → BUY（越深入越强）
-卖出逻辑: 价格进入"预测高点区间" → SELL（越接近越强）
+结合 ML 方向预测和 Pivot Point 点位：
+- 买入: ML 预测高点 >= PP，且当前价格 <= S1（或 S2 强买）
+- 卖出: 当前持有多头，且当前价格 >= PP（或 R1 强卖）
+- 止损: 当前持有多头，且当前价格 <= S2（无条件强卖）
 """
 import time
 from datetime import datetime
@@ -21,62 +21,70 @@ from config.settings import (
 
 class MLPriceStrategy(BaseStrategy):
     """
-    基于 ML 价格区间预测的交易策略。
-
-    将预测的日内价格区间 [predicted_low, predicted_high] 划分为 5 个区域：
-      强买区  | 买入区 | 观望区 | 卖出区 | 强卖区
-      <----30%---|---20%---|---HOLD---|---20%---|---30%---->
-
-    信号强度随价格深入区间边界而递增。
+    基于 ML 方向预测 + Pivot Point 点位的混合策略。
+    
+    信号触发点位：
+    - 买入 (BUY): 价格 <= S1
+    - 强买 (STRONG_BUY): 价格 <= S2
+    - 卖出 (SELL): 价格 >= PP
+    - 强卖 (STRONG_SELL): 价格 >= R1 或 价格 <= S2 (止损)
     """
-
-    # 区间比例参数
-    STRONG_ZONE_PCT = 0.30   # 预测区间两端各 30% 为买入/卖出区
-    ENTRY_ZONE_PCT = 0.20    # 紧邻强区的 20% 为普通买入/卖出区
 
     def __init__(self, predictor: MLPredictor):
         self._predictor = predictor
         # {etf_code: PricePrediction}
         self._daily_predictions: dict[str, PricePrediction] = {}
+        # {etf_code: dict_of_pp_levels}
+        self._daily_pp_levels: dict[str, dict[str, float]] = {}
         self._cooldown_tracker: dict[str, dict[str, float]] = {}
         # 信号持久化追踪: {etf_code: (signal_type, count)}
         self._signal_persistence: dict[str, tuple[SignalType, int]] = {}
 
     @property
     def name(self) -> str:
-        return "ML价格区间策略"
+        return "ML+PP混合策略"
 
-    def set_daily_predictions(
-        self, predictions: dict[str, PricePrediction]
+    def set_daily_data(
+        self, 
+        predictions: dict[str, PricePrediction],
+        pp_levels: dict[str, dict[str, float]]
     ) -> None:
         """
-        每日开盘前设置预测值。
+        每日开盘前设置 ML 预测值和 PP 点位。
 
         Args:
             predictions: {etf_code: PricePrediction}
+            pp_levels: {etf_code: {"PP": x, "S1": x, "S2": x, "R1": x, "R2": x}}
         """
         self._daily_predictions = predictions
+        self._daily_pp_levels = pp_levels
+        
         for code, pred in predictions.items():
-            spread = pred.predicted_high - pred.predicted_low
-            logger.info(
-                f"[{code}] ML预测: "
-                f"最低={pred.predicted_low:.4f} "
-                f"最高={pred.predicted_high:.4f} "
-                f"区间={spread:.4f} "
-                f"置信度={pred.confidence:.2f}"
-            )
+            pp = pp_levels.get(code)
+            if pp:
+                logger.info(
+                    f"[{code}] 策略数据更新 - "
+                    f"ML预测High={pred.predicted_high:.4f} | "
+                    f"PP={pp['PP']:.4f}, S1={pp['S1']:.4f}, S2={pp['S2']:.4f}"
+                )
 
-    def evaluate(self, snapshot: MarketSnapshot) -> TradingSignal:
+    def evaluate(self, snapshot: MarketSnapshot, has_position: bool = False) -> TradingSignal:
         """
-        根据当前价格在预测区间中的位置生成交易信号。
+        根据当前价格在 PP 点位的位置，结合 ML 的高点预测生成信号。
+        
+        Args:
+            snapshot: 行情快照
+            has_position: 当前是否持有该 ETF 的仓位，影响卖出/止损判断
         """
         code = snapshot.etf_code
         now = datetime.now()
 
-        # 无预测数据
+        # 无预测或 PP 数据
         pred = self._daily_predictions.get(code)
-        if pred is None:
-            return self._hold_signal(snapshot, now, "无ML预测数据")
+        pp = self._daily_pp_levels.get(code)
+        
+        if pred is None or pp is None:
+            return self._hold_signal(snapshot, now, "无ML预测或PP数据")
 
         # 置信度不足
         if pred.confidence < ML_PRED_CONFIDENCE_THRESHOLD:
@@ -89,72 +97,89 @@ class MLPriceStrategy(BaseStrategy):
         if price <= 0:
             return self._hold_signal(snapshot, now, "价格无效")
 
-        # ---------- 计算价格区间 ----------
-        pred_low = pred.predicted_low
-        pred_high = pred.predicted_high
-        spread = pred_high - pred_low
+        # ---------- 获取关键点位 ----------
+        # 为了宽松触发，允许点位周围有 0.15% 的容差
+        tolerance = 0.0015
+        
+        S2_threshold = pp["S2"] * (1 + tolerance)
+        S1_threshold = pp["S1"] * (1 + tolerance)
+        PP_threshold = pp["PP"] * (1 - tolerance)
+        R1_threshold = pp["R1"] * (1 - tolerance)
 
-        if spread <= 0:
-            return self._hold_signal(snapshot, now, "预测区间无效")
-
-        # 价格在区间中的位置 (0=最低, 1=最高, <0=低于预测低点, >1=高于预测高点)
-        position = (price - pred_low) / spread
+        # ML 认为今天能涨到哪
+        ml_target_high = pred.predicted_high
 
         signal_type = SignalType.HOLD
         strength = 0.0
-        reason_parts = [f"预测[{pred_low:.4f}~{pred_high:.4f}]"]
+        reason_parts = []
 
-        # ---------- 信号生成 ----------
-
-        # 强买区: position <= 0 (价格在预测最低价以下)
-        if position <= 0:
-            signal_type = SignalType.STRONG_BUY
-            depth = abs(position)  # 越低于预测低点，strength 越大
-            strength = min(1.0, 0.7 + depth * 2)
-            reason_parts.append(f"强买(价格{price:.4f}≤预测低点{pred_low:.4f})")
-
-        # 买入区: 0 < position <= STRONG_ZONE_PCT
-        elif position <= self.STRONG_ZONE_PCT:
-            signal_type = SignalType.BUY
-            strength = min(0.7, 0.3 + (self.STRONG_ZONE_PCT - position) / self.STRONG_ZONE_PCT * 0.4)
-            reason_parts.append(f"买入(价格{price:.4f}接近低点, 位置{position:.1%})")
-
-        # 卖出区: (1 - STRONG_ZONE_PCT) <= position < 1
-        elif position >= 1.0 - self.STRONG_ZONE_PCT:
-            if position >= 1.0:
-                # 强卖区: 价格在预测最高价以上
+        # ==========================================
+        # 1. 卖出逻辑 (如果有持仓)
+        # ==========================================
+        if has_position:
+            # 止损: 跌破 S2 或接近 S2
+            if price <= pp["S2"] * (1 + tolerance*2):
                 signal_type = SignalType.STRONG_SELL
-                depth = position - 1.0
-                strength = min(1.0, 0.7 + depth * 2)
-                reason_parts.append(f"强卖(价格{price:.4f}≥预测高点{pred_high:.4f})")
-            else:
+                strength = 1.0
+                reason_parts.append(f"止损(价格{price:.4f}跌至S2:{pp['S2']:.4f})")
+            
+            # 强卖止盈: 涨到 R1
+            elif price >= R1_threshold:
+                signal_type = SignalType.STRONG_SELL
+                strength = 0.9
+                reason_parts.append(f"强卖止盈(价格{price:.4f}到达R1:{pp['R1']:.4f})")
+                
+            # 卖出止盈: 涨到 PP
+            elif price >= PP_threshold:
                 signal_type = SignalType.SELL
-                sell_depth = (position - (1.0 - self.STRONG_ZONE_PCT)) / self.STRONG_ZONE_PCT
-                strength = min(0.7, 0.3 + sell_depth * 0.4)
-                reason_parts.append(f"卖出(价格{price:.4f}接近高点, 位置{position:.1%})")
+                strength = 0.7
+                reason_parts.append(f"卖出止盈(价格{price:.4f}到达PP:{pp['PP']:.4f})")
 
-        # 观望区: 中间区域
-        else:
+        # ==========================================
+        # 2. 买入逻辑 (且当前没有发出卖出信号)
+        # ==========================================
+        if signal_type == SignalType.HOLD:
+            # ---------- ML 空间过滤 ----------
+            # 要求 ML 预测高点至少能摸到 PP 附近
+            if ml_target_high < pp["PP"] * 0.998:
+                return self._hold_signal(
+                    snapshot, now,
+                    f"ML过滤: 预期反弹太弱 (预测高{ml_target_high:.4f} < PP{pp['PP']:.4f})"
+                )
+                
+            # ---------- 点位触发 ----------
+            if price <= pp["S2"]:
+                # 极端超跌情况
+                signal_type = SignalType.STRONG_BUY
+                strength = 0.9
+                reason_parts.append(f"强买(价格{price:.4f}落入S2:{pp['S2']:.4f})")
+                
+            elif price <= S1_threshold:
+                # 正常 S1 支撑
+                signal_type = SignalType.BUY
+                strength = 0.7
+                reason_parts.append(f"买入(价格{price:.4f}落入S1:{pp['S1']:.4f})")
+
+        # 观望区: 中间区域或不需要操作
+        if signal_type == SignalType.HOLD:
             return self._hold_signal(
                 snapshot, now,
-                f"ML观望(位置{position:.1%}, 区间[{pred_low:.4f}~{pred_high:.4f}])"
+                f"区间震荡(价格{price:.4f}, S1={pp['S1']:.4f}, PP={pp['PP']:.4f})"
             )
 
         # ---------- 折溢价安全网 ----------
-        # 高溢价时不买入（防止在情绪溢价时追高）
         if signal_type in (SignalType.BUY, SignalType.STRONG_BUY):
             if snapshot.premium_rate > 0.008:
                 return self._hold_signal(
                     snapshot, now,
-                    f"ML买入被高溢价({snapshot.premium_rate*100:.2f}%)拦截"
+                    f"买入被高溢价({snapshot.premium_rate*100:.2f}%)拦截"
                 )
 
-        # 深折价时不卖出（防止恐慌割肉）
-        if signal_type in (SignalType.SELL, SignalType.STRONG_SELL):
+        if signal_type in (SignalType.SELL, SignalType.STRONG_SELL) and reason_parts and "止盈" in reason_parts[0]:
             if snapshot.premium_rate < -0.008:
                 return self._hold_signal(
                     snapshot, now,
-                    f"ML卖出被深折价({snapshot.premium_rate*100:.2f}%)拦截"
+                    f"止盈被深折价({snapshot.premium_rate*100:.2f}%)拦截"
                 )
 
         # ---------- 信号持久化校验 ----------
@@ -172,26 +197,26 @@ class MLPriceStrategy(BaseStrategy):
 
         self._signal_persistence[code] = (signal_type, count)
 
-        # 至少连续 2 次确认
+        # 至少连续 2 次确认 (防止一笔异常 tick)
         if count < 2 and signal_type != SignalType.HOLD:
             return self._hold_signal(
                 snapshot, now,
-                f"ML信号确认中({count}/2), " + ", ".join(reason_parts)
+                f"信号确认中({count}/2), " + ", ".join(reason_parts)
             )
 
         # ---------- 冷却检查 ----------
         if self._is_cooling_down(code, signal_type):
             return self._hold_signal(
                 snapshot, now,
-                f"ML信号冷却中({signal_type.value})"
+                f"信号冷却中({signal_type.value})"
             )
 
         self._update_cooldown(code, signal_type)
 
         reason = f"[{self.name}] " + ", ".join(reason_parts)
         logger.info(
-            f"[{code}] ML信号: {signal_type.value} | "
-            f"强度: {strength:.2f} | 位置: {position:.1%} | {reason}"
+            f"[{code}] 信号: {signal_type.value} | "
+            f"强度: {strength:.2f} | {reason}"
         )
 
         return TradingSignal(
@@ -210,6 +235,7 @@ class MLPriceStrategy(BaseStrategy):
     def reset(self) -> None:
         """重置策略状态"""
         self._daily_predictions.clear()
+        self._daily_pp_levels.clear()
         self._cooldown_tracker.clear()
         self._signal_persistence.clear()
         logger.info(f"[{self.name}] 策略状态已重置")
