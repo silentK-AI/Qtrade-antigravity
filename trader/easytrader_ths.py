@@ -70,7 +70,7 @@ class EasyTrader(BaseTrader):
             logger.error(f"同花顺连接失败: {e}")
             return False
 
-    def execute(self, order: TradeOrder) -> bool:
+    def _do_execute(self, order: TradeOrder) -> bool:
         """执行交易指令"""
         if not self._connected or self._main is None:
             logger.error("同花顺未连接，无法执行交易")

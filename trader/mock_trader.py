@@ -19,7 +19,7 @@ class MockTrader(BaseTrader):
         super().__init__(position_manager)
         self._connected = False
 
-    def execute(self, order: TradeOrder) -> bool:
+    def _do_execute(self, order: TradeOrder) -> bool:
         """模拟执行交易"""
         if not self._connected:
             logger.error("模拟交易器未连接")

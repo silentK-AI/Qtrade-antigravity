@@ -76,7 +76,7 @@ class XtQuantTrader(BaseTrader):
             logger.error(f"miniQMT 连接异常: {e}")
             return False
 
-    def execute(self, order: TradeOrder) -> bool:
+    def _do_execute(self, order: TradeOrder) -> bool:
         """执行交易指令"""
         if not self._connected or self._xt_trader is None:
             logger.error("miniQMT 未连接，无法执行交易")
