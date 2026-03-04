@@ -1,126 +1,123 @@
 """
-直接用 pywinauto 操控同花顺下单（绕过 easytrader）
-逐步操作并输出每步结果，定位问题
+直接用 pywinauto 操控同花顺下单（处理弹窗版本）
 """
 import time
 import pywinauto
 from pywinauto import Application, Desktop
 
 print("=" * 50)
-print("直接操控同花顺下单测试")
+print("同花顺下单测试 v3")
 print("=" * 50)
 
-# 1. 连接同花顺客户端
+# 1. 连接
 print("\n[1] 连接同花顺...")
-try:
-    app = Application(backend="win32").connect(path=r'C:\同花顺软件\同花顺\xiadan.exe')
-    print("    连接成功!")
-except Exception as e:
-    print(f"    连接失败: {e}")
-    print("    尝试连接所有同花顺窗口...")
-    try:
-        app = Application(backend="win32").connect(class_name='AfxMDIFrame42s')
-        print("    通过 class_name 连接成功!")
-    except Exception as e2:
-        print(f"    连接失败: {e2}")
-        exit(1)
+app = Application(backend="win32").connect(path=r'C:\同花顺软件\同花顺\xiadan.exe')
+main = app.top_window()
+print(f"    连接成功! 窗口='{main.window_text()}'")
 
-# 2. 找到主窗口
-print("\n[2] 查找主窗口...")
-try:
-    main_window = app.top_window()
-    print(f"    主窗口标题: '{main_window.window_text()}'")
-    print(f"    主窗口类名: '{main_window.class_name()}'")
-    print(f"    主窗口句柄: {main_window.handle}")
-except Exception as e:
-    print(f"    查找主窗口失败: {e}")
-    exit(1)
+# 2. 键盘输入下单信息
+print("\n[2] 输入下单信息...")
+main.set_focus()
+time.sleep(0.5)
 
-# 3. 列出所有顶层窗口（寻找下单窗口）
-print("\n[3] 列出所有同花顺相关窗口:")
+# F1 切换到买入
+main.type_keys('{F1}', set_foreground=True)
+time.sleep(1)
+print("    F1 买入页面 ✓")
+
+# 输入代码
+main.type_keys('513310', set_foreground=True)
+time.sleep(0.5)
+print("    代码 513310 ✓")
+
+# Tab → 价格
+main.type_keys('{TAB}', set_foreground=True)
+time.sleep(0.3)
+main.type_keys('^a3.41', set_foreground=True)
+time.sleep(0.3)
+print("    价格 3.41 ✓")
+
+# Tab → 数量
+main.type_keys('{TAB}', set_foreground=True)
+time.sleep(0.3)
+main.type_keys('^a100', set_foreground=True)
+time.sleep(0.3)
+print("    数量 100 ✓")
+
+# 3. 按回车提交
+print("\n[3] 按回车提交...")
+main.type_keys('{ENTER}', set_foreground=True)
+time.sleep(1)
+
+# 4. 处理弹窗
+print("\n[4] 检查并处理弹窗...")
 desktop = Desktop(backend="win32")
-for w in desktop.windows():
-    try:
-        title = w.window_text()
-        cls = w.class_name()
-        if title or 'Afx' in cls or 'ths' in cls.lower():
-            print(f"    标题='{title}', 类名='{cls}', 句柄={w.handle}")
-    except:
-        pass
 
-# 4. 尝试用快捷键买入
-print("\n[4] 使用键盘操控下单...")
-try:
-    # 激活主窗口
-    main_window.set_focus()
+handled = False
+for attempt in range(5):
     time.sleep(0.5)
+    for w in desktop.windows():
+        try:
+            title = w.window_text()
+            cls = w.class_name()
+            
+            if cls == 'TopWndTips' or ('提示' in title and cls == '#32770'):
+                print(f"    发现弹窗: '{title}' (class={cls})")
+                
+                # 尝试找到并点击 "是" 或 "确定" 按钮
+                popup_app = Application(backend="win32").connect(handle=w.handle)
+                popup = popup_app.window(handle=w.handle)
+                
+                # 列出弹窗中的按钮
+                for child in popup.children():
+                    child_text = child.window_text()
+                    child_class = child.class_name()
+                    if child_class == 'Button' or child_text:
+                        print(f"      控件: '{child_text}' (class={child_class})")
+                
+                # 尝试点各种确认按钮
+                for btn_text in ['是(&Y)', '是(Y)', '确定', '是', 'Yes', 'OK']:
+                    try:
+                        btn = popup[btn_text]
+                        btn.click()
+                        print(f"    点击了 '{btn_text}' ✓")
+                        handled = True
+                        break
+                    except Exception:
+                        continue
+                
+                if not handled:
+                    # 直接发送回车
+                    print("    未找到按钮，发送回车...")
+                    popup.type_keys('{ENTER}')
+                    handled = True
+                
+                break
+        except:
+            pass
     
-    # F1 = 买入
-    print("    发送 F1 (切换到买入页面)...")
-    main_window.type_keys('{F1}', set_foreground=True)
-    time.sleep(1)
-    
-    # 输入证券代码
-    print("    输入证券代码 513310...")
-    main_window.type_keys('513310', set_foreground=True)
-    time.sleep(0.5)
-    
-    # Tab 到价格栏
-    print("    Tab 到价格栏...")
-    main_window.type_keys('{TAB}', set_foreground=True)
-    time.sleep(0.3)
-    
-    # 清空并输入价格
-    print("    输入价格 3.41...")
-    main_window.type_keys('^a', set_foreground=True)  # 全选
-    time.sleep(0.1)
-    main_window.type_keys('3.41', set_foreground=True)
-    time.sleep(0.3)
-    
-    # Tab 到数量栏
-    print("    Tab 到数量栏...")
-    main_window.type_keys('{TAB}', set_foreground=True)
-    time.sleep(0.3)
-    
-    # 输入数量
-    print("    输入数量 100...")
-    main_window.type_keys('^a', set_foreground=True)
-    time.sleep(0.1)
-    main_window.type_keys('100', set_foreground=True)
-    time.sleep(0.3)
-    
-    # 回车提交
-    print("    按回车提交...")
-    main_window.type_keys('{ENTER}', set_foreground=True)
-    time.sleep(1)
-    
-    # 如果有确认弹窗，再按一次回车
-    print("    再按一次回车（确认弹窗）...")
-    main_window.type_keys('{ENTER}', set_foreground=True)
-    time.sleep(1)
-    
-    print("    下单操作完成!")
+    if handled:
+        break
 
-except Exception as e:
-    print(f"    下单失败: {e}")
-    import traceback
-    traceback.print_exc()
+if not handled:
+    print("    未检测到弹窗")
 
 # 5. 等待
 print("\n[5] 等待 3 秒...")
 time.sleep(3)
 
-# 6. 检查是否有弹窗
-print("\n[6] 检查弹窗:")
+# 6. 再次检查弹窗
+print("\n[6] 最终弹窗检查:")
 for w in desktop.windows():
     try:
         title = w.window_text()
-        if title and ('提示' in title or '确认' in title or 'TopWnd' in title):
-            print(f"    弹窗: '{title}' (class={w.class_name()})")
+        cls = w.class_name()
+        if cls == 'TopWndTips' or '提示' in title:
+            print(f"    还有弹窗: '{title}' (class={cls})")
     except:
         pass
 
 print("\n" + "=" * 50)
-print("请立刻检查同花顺「当日委托」是否有 513310 记录")
+print("请检查同花顺「当日委托」是否有 513310 记录")
 print("然后手动撤单！")
 print("=" * 50)
