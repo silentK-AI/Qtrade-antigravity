@@ -72,6 +72,15 @@ class MLPredictor:
         "ma20_deviation",            # MA20 偏离度
         "atr_5d",                    # 5 日 ATR
         "rsi_14d",                   # 14 日 RSI
+        # ---- 新增维度 (8) ----
+        "premium_rate_avg_5d",       # 5 日平均折溢价率
+        "premium_rate_std_5d",       # 5 日折溢价波动
+        "overnight_gap_pct",         # 隔夜缺口幅度
+        "day_of_week",               # 星期几 (0=周一 ... 4=周五)
+        "amplitude_ma5",             # 5 日平均振幅
+        "volume_ma5_ratio",          # 量比 (当日量/5日均量)
+        "upper_shadow_pct",          # 上影线占比
+        "lower_shadow_pct",          # 下影线占比
     ]
 
     def __init__(self, model_dir: str = "models"):
@@ -433,6 +442,54 @@ class MLPredictor:
             # RSI 14 日
             rsi = self._calc_rsi(closes, 14)
             features.append(rsi)
+
+            # ===== 新增维度 (8) =====
+            # 折溢价率统计（如果历史数据中有 premium_rate 列）
+            if "溢价率" in hist_df.columns:
+                prem = hist_df["溢价率"].astype(float).values
+                prem_5 = prem[-5:] if len(prem) >= 5 else prem
+                features.append(float(np.mean(prem_5)) * 100)
+                features.append(float(np.std(prem_5)) * 100 if len(prem_5) > 1 else 0.0)
+            else:
+                features.extend([0.0, 0.0])
+
+            # 隔夜缺口幅度
+            if overnight_info and overnight_info.is_valid and overnight_info.prev_close > 0:
+                gap_pct = (overnight_info.overnight_price - overnight_info.prev_close) / overnight_info.prev_close * 100
+            else:
+                gap_pct = 0.0
+            features.append(gap_pct)
+
+            # 星期几
+            try:
+                # 从 hist_df 推断日期
+                if "日期" in hist_df.columns:
+                    day_of_week = pd.to_datetime(hist_df.iloc[-1]["日期"]).weekday()
+                else:
+                    from datetime import datetime as _dt
+                    day_of_week = _dt.now().weekday()
+            except Exception:
+                day_of_week = 0
+            features.append(float(day_of_week))
+
+            # 5 日平均振幅
+            amplitudes = (highs - lows) / closes * 100
+            amp_5 = amplitudes[-5:] if len(amplitudes) >= 5 else amplitudes
+            features.append(float(np.mean(amp_5)))
+
+            # 量比
+            volumes = hist_df["成交量"].astype(float).values
+            vol_5_avg = float(np.mean(volumes[-5:])) if len(volumes) >= 5 else float(np.mean(volumes))
+            vol_current = float(volumes[-1]) if len(volumes) > 0 else 0
+            features.append(vol_current / vol_5_avg if vol_5_avg > 0 else 1.0)
+
+            # 上影线占比 = (high - max(open, close)) / (high - low)
+            upper_shadow = (prev_high - max(prev_open, prev_close)) / hl_range if hl_range > 0 else 0
+            features.append(upper_shadow)
+
+            # 下影线占比 = (min(open, close) - low) / (high - low)
+            lower_shadow = (min(prev_open, prev_close) - prev_low) / hl_range if hl_range > 0 else 0
+            features.append(lower_shadow)
 
             assert len(features) == len(self.FEATURE_NAMES), \
                 f"特征数量不匹配: {len(features)} != {len(self.FEATURE_NAMES)}"

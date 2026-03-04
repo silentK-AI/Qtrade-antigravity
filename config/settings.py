@@ -88,7 +88,7 @@ PROFIT_GUARD_RETRACEMENT = 0.0005 # 回落至 0.05% 利润时平仓 (Entry + 0.0
 TAKE_PROFIT_PCT = 0.008       # 默认止盈 0.8% (作为兜底)
 STOP_LOSS_PCT = 0.005         # 默认止损 0.5% (作为兜底)
 TRAILING_STOP_PCT = 0.003     # 跟踪止损回撤 0.3%
-MAX_DAILY_TRADES = 3          # 每标的每日最大交易笔数
+MAX_DAILY_TRADES = 2          # 每标的每日最大交易笔数（精选信号）
 MAX_POSITION_PCT = 0.30       # 单标的最大仓位占总资产比例
 MAX_TOTAL_POSITION_PCT = 0.80 # 所有标的合计最大仓位占总资产比例
 INITIAL_CAPITAL = 10000.0    # 初始资金（模拟交易用）
@@ -100,7 +100,7 @@ ETF_COMMISSION_RATE = 0.000061 # ETF 交易佣金率为 0.61%%
 PREMIUM_THRESHOLD = 0.003     # 溢价阈值 0.3%
 DISCOUNT_THRESHOLD = -0.003   # 折价阈值 -0.3%
 FUTURES_MOMENTUM_WINDOW = 5   # 期货动量计算窗口（分钟）
-SIGNAL_COOLDOWN_SECONDS = 300 # 同一标的同方向信号冷却时间（秒）
+SIGNAL_COOLDOWN_SECONDS = 600 # 同一标的同方向信号冷却时间（秒）= 10分钟
 GLOBAL_TRADE_COOLDOWN_SECONDS = 60 # 同一标的任意两次交易间的最小间隔（秒）
 MIN_SIGNAL_PERSISTENCE_COUNT = 2   # 信号持久化：连续 N 次扫描信号一致才执行
 VOLUME_CONFIRM_RATIO = 1.2    # 成交量确认倍率（需大于均量的此倍数）
@@ -113,7 +113,7 @@ ML_TRAINING_DAYS = 180                                     # 训练数据天数
 ML_PRED_CONFIDENCE_THRESHOLD = 0.3                         # 预测置信度阈值
 ML_PRED_BUY_BUFFER = 0.001                                 # 买入缓冲（预测最低价 + buffer）
 ML_PRED_SELL_BUFFER = 0.001                                # 卖出缓冲（预测最高价 - buffer）
-ML_ENABLED = os.getenv("ML_ENABLED", "true").lower() == "true"  # 是否启用 ML 策略
+ML_ENABLED = os.getenv("ML_ENABLED", "true").lower() == "true"  # 是否启用 ML 策略（必须先训练模型）
 
 # ============================================================
 #  系统参数

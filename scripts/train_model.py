@@ -63,7 +63,7 @@ def fetch_training_data(etf_code: str, days: int = 180):
         
         # 字段映射
         df = df.rename(columns={
-            "day": "date",
+            "day": "日期",
             "open": "开盘",
             "high": "最高",
             "low": "最低",
@@ -72,7 +72,7 @@ def fetch_training_data(etf_code: str, days: int = 180):
         })
         
         # 转换数值类型
-        df["date"] = pd.to_datetime(df["date"])
+        df["日期"] = pd.to_datetime(df["日期"])
         for col in ["开盘", "最高", "最低", "收盘", "成交量"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
             
@@ -80,7 +80,7 @@ def fetch_training_data(etf_code: str, days: int = 180):
         if "amount" not in df.columns:
             df["成交额"] = df["成交量"] * df["收盘"]
             
-        df = df.sort_values("date").reset_index(drop=True)
+        df = df.sort_values("日期").reset_index(drop=True)
         logger.info(f"[{etf_code}] 获取到 {len(df)} 条历史数据")
         return df
 

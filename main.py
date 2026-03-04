@@ -59,13 +59,8 @@ class TradingEngine:
 
         # 构建策略映射: {etf_code: StrategyInstance}
         self._strategy_map = {}
-        
-        # 预先创建共享的子策略实例
-        shared_arb = FuturesETFArbStrategy()
-        from strategy.vwap_reversion_strategy import VWAPReversionStrategy
-        shared_vwap = VWAPReversionStrategy()
-        
-        # ML 策略初始化
+
+        # ML 策略初始化（主策略）
         self._ml_predictor = None
         self._ml_strategy = None
         if ML_ENABLED:
@@ -74,33 +69,30 @@ class TradingEngine:
             if missing_codes:
                 logger.info(f"检测到 {len(missing_codes)} 个标的缺失 ML 模型，开始自动训练: {missing_codes}")
                 self._auto_train_models(missing_codes)
-            
+
             loaded = self._ml_predictor.load_all_models(self._etf_codes)
             if loaded > 0:
                 self._ml_strategy = MLPriceStrategy(self._ml_predictor)
-                logger.info(f"ML策略已启用: {loaded} 个标的中有模型")
+                logger.info(f"ML策略已启用: {loaded}/{len(self._etf_codes)} 个标的有模型")
             else:
-                logger.warning("ML策略: 训练失败或无数据，仅使用传统策略")
+                logger.warning("ML策略: 无可用模型，回退到传统策略")
         else:
-            logger.info("ML策略已禁用")
+            logger.info("ML策略已禁用 (ML_ENABLED=false)")
+
+        # 回退策略（ML 不可用时使用）
+        from strategy.vwap_reversion_strategy import VWAPReversionStrategy
+        fallback_strategy = FuturesETFArbStrategy()
 
         # 为每个标的分配策略
-        # 用户的特殊要求：513310 和 513880 只使用 FuturesETFArbStrategy
-        exclusive_codes = ["513310", "513880"]
-        
         for code in self._etf_codes:
-            if code in exclusive_codes:
-                # 独占模式：仅使用期货套利策略
-                self._strategy_map[code] = FuturesETFArbStrategy() # 每个标的持有独立状态
-                logger.info(f"[{code}] 已配置专属策略: FuturesETFArbStrategy (仅细节动因触发)")
+            if self._ml_strategy and self._ml_predictor.has_model(code):
+                # ML 主策略（独立使用，不再用 CompositeStrategy 包裹）
+                self._strategy_map[code] = self._ml_strategy
+                logger.info(f"[{code}] 策略: ML价格区间策略")
             else:
-                # 复合模式：合并所有可用策略
-                strategies = [shared_arb, shared_vwap]
-                if self._ml_strategy:
-                    strategies.append(self._ml_strategy)
-                
-                self._strategy_map[code] = CompositeStrategy(strategies)
-                logger.info(f"[{code}] 已配置复合策略: {[s.name for s in strategies]}")
+                # 回退到传统策略
+                self._strategy_map[code] = fallback_strategy
+                logger.info(f"[{code}] 策略: 传统策略 (无ML模型)")
 
         self._position_manager = PositionManager(initial_capital)
         self._risk_manager = RiskManager(self._position_manager)
@@ -115,15 +107,8 @@ class TradingEngine:
         if mode == "paper":
             self._trader: BaseTrader = MockTrader(self._position_manager)
         elif mode == "live":
-            trader_type = os.getenv("TRADER_BACKEND", "easytrader")
-            if trader_type == "easytrader":
-                from trader.easytrader_ths import EasyTrader
-                self._trader = EasyTrader(self._position_manager)
-            elif trader_type == "xtquant":
-                from trader.xtquant_trader import XtQuantTrader
-                self._trader = XtQuantTrader(self._position_manager)
-            else:
-                raise ValueError(f"未知交易后端: {trader_type}")
+            from trader.easytrader_ths import EasyTrader
+            self._trader = EasyTrader(self._position_manager)
         else:
             raise ValueError(f"未知运行模式: {mode}")
 
