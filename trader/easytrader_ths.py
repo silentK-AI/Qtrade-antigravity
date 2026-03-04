@@ -19,6 +19,7 @@ from risk.position_manager import PositionManager
 
 try:
     from pywinauto import Application, Desktop
+    import win32clipboard
     HAS_PYWINAUTO = True
 except ImportError:
     HAS_PYWINAUTO = False
@@ -149,15 +150,13 @@ class EasyTrader(BaseTrader):
             self._main.type_keys(code, set_foreground=True)
             time.sleep(self.STEP_DELAY)
 
-            # 3. Tab 到价格栏，输入价格（保留 3 位小数）
+            # 3. Tab 到价格栏，用剪贴板粘贴价格（避免输入法拦截小数点）
             self._main.type_keys('{TAB}', set_foreground=True)
             time.sleep(self.STEP_DELAY)
 
-            # 先全选清空，再输入价格
-            # 用 {.} 确保小数点不被输入法拦截
             price_str = f"{price:.3f}"
-            safe_price = price_str.replace('.', '{.}')
-            self._main.type_keys('^a' + safe_price, set_foreground=True)
+            self._clip_set(price_str)
+            self._main.type_keys('^a^v', set_foreground=True)
             time.sleep(self.STEP_DELAY)
 
             # 4. Tab 到数量栏，输入数量
@@ -255,8 +254,16 @@ class EasyTrader(BaseTrader):
             logger.error(f"撤单失败: {e}")
 
     # ------------------------------------------------------------------
-    #  连接管理
+    #  工具方法
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clip_set(text: str) -> None:
+        """设置剪贴板内容（用于粘贴价格，避免输入法问题）"""
+        win32clipboard.OpenClipboard()
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardText(str(text))
+        win32clipboard.CloseClipboard()
 
     def disconnect(self) -> None:
         """断开连接"""
