@@ -10,7 +10,6 @@ REM  用法: 以管理员身份运行一次即可
 REM ============================================================
 
 set PROJECT_DIR=C:\Quati-Trade
-set PYTHON_PATH=python
 
 echo.
 echo ============================================================
@@ -18,12 +17,15 @@ echo  正在注册 Quati-Trade 自启动任务...
 echo ============================================================
 echo.
 
+REM 获取当前用户名
+set CURRENT_USER=%USERNAME%
+
 REM === 1. 注册 Dashboard 自启 ===
 echo [1/2] 注册 Dashboard (port 8088) 开机自启...
 schtasks /Create /TN "Quati-Dashboard" ^
-    /TR "cmd /c cd /d %PROJECT_DIR% && %PYTHON_PATH% main.py dashboard --port 8088 >> logs\dashboard_schtask.log 2>&1" ^
+    /TR "cmd /c cd /d %PROJECT_DIR% && pythonw main.py dashboard --port 8088" ^
     /SC ONSTART ^
-    /RU SYSTEM ^
+    /DELAY 0000:30 ^
     /RL HIGHEST ^
     /F
 if %errorlevel%==0 (
@@ -37,9 +39,9 @@ echo.
 REM === 2. 注册 Scheduler 自启 ===
 echo [2/2] 注册 Scheduler (交易调度器) 开机自启...
 schtasks /Create /TN "Quati-Scheduler" ^
-    /TR "cmd /c cd /d %PROJECT_DIR% && %PYTHON_PATH% scripts\scheduler.py >> logs\scheduler_schtask.log 2>&1" ^
+    /TR "cmd /c cd /d %PROJECT_DIR% && pythonw scripts\scheduler.py" ^
     /SC ONSTART ^
-    /RU SYSTEM ^
+    /DELAY 0001:00 ^
     /RL HIGHEST ^
     /F
 if %errorlevel%==0 (
@@ -53,13 +55,12 @@ echo ============================================================
 echo  注册完成！
 echo.
 echo  已创建的计划任务:
-echo    - Quati-Dashboard  : 开机自动启动 Dashboard (8088端口)
-echo    - Quati-Scheduler  : 开机自动启动交易调度器
+echo    - Quati-Dashboard  : 开机30秒后自动启动 Dashboard
+echo    - Quati-Scheduler  : 开机60秒后自动启动交易调度器
 echo.
 echo  管理命令:
-echo    查看任务: schtasks /Query /TN "Quati-Dashboard"
 echo    手动启动: schtasks /Run /TN "Quati-Dashboard"
-echo    手动停止: schtasks /End /TN "Quati-Dashboard"
+echo    查看状态: schtasks /Query /TN "Quati-Dashboard"
 echo    删除任务: schtasks /Delete /TN "Quati-Dashboard" /F
 echo ============================================================
 pause
