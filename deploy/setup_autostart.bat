@@ -17,13 +17,10 @@ echo  正在注册 Quati-Trade 自启动任务...
 echo ============================================================
 echo.
 
-REM 获取当前用户名
-set CURRENT_USER=%USERNAME%
-
 REM === 1. 注册 Dashboard 自启 ===
 echo [1/2] 注册 Dashboard (port 8088) 开机自启...
 schtasks /Create /TN "Quati-Dashboard" ^
-    /TR "cmd /c cd /d %PROJECT_DIR% && pythonw main.py dashboard --port 8088" ^
+    /TR "wscript.exe %PROJECT_DIR%\deploy\start_dashboard_bg.vbs" ^
     /SC ONSTART ^
     /DELAY 0000:30 ^
     /RL HIGHEST ^
@@ -39,7 +36,7 @@ echo.
 REM === 2. 注册 Scheduler 自启 ===
 echo [2/2] 注册 Scheduler (交易调度器) 开机自启...
 schtasks /Create /TN "Quati-Scheduler" ^
-    /TR "cmd /c cd /d %PROJECT_DIR% && pythonw scripts\scheduler.py" ^
+    /TR "cmd /c cd /d %PROJECT_DIR% && python scripts\scheduler.py >> logs\scheduler_schtask.log 2>&1" ^
     /SC ONSTART ^
     /DELAY 0001:00 ^
     /RL HIGHEST ^
