@@ -693,16 +693,16 @@
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
-            // 设置默认日期：过去7天到今天
+            // 设置默认日期：今天
             const now = new Date();
-            const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            const today = now.toISOString().split('T')[0];
 
-            // 如果 URL 参数或 localStorage 没指定日期，使用默认
+            // 如果 URL 参数或 localStorage 没指定日期，使用今天
             if (!document.getElementById('startDate').value) {
-                document.getElementById('startDate').value = lastWeek.toISOString().split('T')[0];
+                document.getElementById('startDate').value = today;
             }
             if (!document.getElementById('endDate').value) {
-                document.getElementById('endDate').value = now.toISOString().split('T')[0];
+                document.getElementById('endDate').value = today;
             }
 
             // 同步 UI 状态 (Mode 已在 script 顶部逻辑处理)
