@@ -123,11 +123,11 @@ class MLPriceStrategy(BaseStrategy):
                 strength = 1.0
                 reason_parts.append(f"止损(价格{price:.4f}跌至S2:{pp['S2']:.4f})")
             
-            # 强卖止盈: 涨到 R1
-            elif price >= R1_threshold:
+            # 强卖止盈: 涨到 R1 或接近 ML 预测高点
+            elif price >= R1_threshold or price >= ml_target_high * 0.998:
                 signal_type = SignalType.STRONG_SELL
                 strength = 0.9
-                reason_parts.append(f"强卖止盈(价格{price:.4f}到达R1:{pp['R1']:.4f})")
+                reason_parts.append(f"强卖止盈(价格{price:.4f}到达R1或ML预测顶)")
                 
             # 卖出止盈: 涨到 PP
             elif price >= PP_threshold:
@@ -140,13 +140,18 @@ class MLPriceStrategy(BaseStrategy):
         # ==========================================
         if signal_type == SignalType.HOLD:
             # ---------- ML 空间过滤 ----------
-            # 要求 ML 预测高点至少能摸到 PP 附近
-            if ml_target_high < pp["PP"] * 0.998:
+            # 要求 ML 预测高点至少比当前价格高 0.3%，保证有微小回调反弹空间
+            if ml_target_high < price * 1.003:
                 return self._hold_signal(
                     snapshot, now,
-                    f"ML过滤: 预期反弹太弱 (预测高{ml_target_high:.4f} < PP{pp['PP']:.4f})"
+                    f"ML过滤: 预期反弹太弱 (预测高{ml_target_high:.4f} 距当前不足0.3%)"
                 )
                 
+            # ---------- 新增高频买入逻辑 ----------
+            # 高频进场点：只要低于 PP，并在 S1 与 PP 之间微跌处
+            # 设定为 PP 往下走 20% 到 S1 距离处（小回调即入）
+            fast_buy_threshold = pp["PP"] - (pp["PP"] - pp["S1"]) * 0.2
+            
             # ---------- 点位触发 ----------
             if price <= pp["S2"]:
                 # 极端超跌情况
@@ -159,6 +164,12 @@ class MLPriceStrategy(BaseStrategy):
                 signal_type = SignalType.BUY
                 strength = 0.7
                 reason_parts.append(f"买入(价格{price:.4f}落入S1:{pp['S1']:.4f})")
+
+            elif price <= fast_buy_threshold:
+                # 高频微跌买入
+                signal_type = SignalType.BUY
+                strength = 0.5
+                reason_parts.append(f"轻买(微跌买入,低于{fast_buy_threshold:.4f})")
 
         # 观望区: 中间区域或不需要操作
         if signal_type == SignalType.HOLD:
