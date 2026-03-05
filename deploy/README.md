@@ -83,6 +83,20 @@ cd C:\Quati-Trade
 deploy\startup.bat
 ```
 
+### 方式三：开机自启（推荐）
+以管理员身份运行一次，之后服务器重启都会自动拉起 Dashboard 和 Scheduler：
+```powershell
+cd C:\Quati-Trade
+deploy\setup_autostart.bat
+```
+
+### 快速重启 Dashboard
+如果 Dashboard 挂了，不需要找进程，一键重启：
+```powershell
+cd C:\Quati-Trade
+deploy\restart_dashboard.bat
+```
+
 ## 六、远程监控
 
 在你的手机或电脑浏览器中访问：
