@@ -127,7 +127,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 #  个股技术指标监控与推送
 # ============================================================
 STOCK_ALERT_SYMBOLS = {
-    # 核心持仓/自选股票
+    # 核心持仓/自选股票 (按用户指定顺序)
     "000063": {"name": "中兴通讯", "type": "stock", "exchange": "SZ"},
     "000333": {"name": "美的集团", "type": "stock", "exchange": "SZ"},
     "000100": {"name": "TCL科技", "type": "stock", "exchange": "SZ"},
@@ -138,12 +138,12 @@ STOCK_ALERT_SYMBOLS = {
     "000988": {"name": "华工科技", "type": "stock", "exchange": "SZ"},
     "300308": {"name": "中际旭创", "type": "stock", "exchange": "SZ"},
     
-    # 行业/宽基 ETF
+    # 行业/宽基 ETF (按用户指定顺序)
     "588200": {"name": "科创芯片ETF", "type": "etf", "exchange": "SH"},
     "159227": {"name": "航空航天ETF", "type": "etf", "exchange": "SZ"},
     "515230": {"name": "软件ETF", "type": "etf", "exchange": "SH"},
     "159326": {"name": "电网设备ETF", "type": "etf", "exchange": "SZ"},
-    "159363": {"name": "AIGC ETF", "type": "etf", "exchange": "SZ"},  # 创业板人工智能
+    "159363": {"name": "AIGC ETF", "type": "etf", "exchange": "SZ"},
     "159770": {"name": "机器人ETF", "type": "etf", "exchange": "SZ"},
     "159767": {"name": "电池龙头ETF", "type": "etf", "exchange": "SZ"},
 }
