@@ -66,7 +66,19 @@ class Notifier:
         """发送日报"""
         self.send("[日报] ETF T+0 交易日报", report)
 
+    def notify_premarket_report(self, content: str) -> None:
+        """发送盘前技术分析报告"""
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        title = f"📊 盘前技术分析 | {date_str}"
+        self.send(title, content)
+
+    def notify_trade_alert(self, content: str) -> None:
+        """发送盘中交易信号提醒"""
+        self.send("⚡ 交易信号提醒", content)
+
     # ------------------------------------------------------------------
+
     def _send_serverchan(self, title: str, content: str) -> None:
         """通过 Server酱 推送微信通知"""
         try:
