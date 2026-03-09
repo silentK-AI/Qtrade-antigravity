@@ -24,7 +24,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
-from config.settings import ACTIVE_ETFS
+from config.etf_settings import ACTIVE_ETFS
 
 # 记录当前运行的交易进程引用
 current_trading_process = None

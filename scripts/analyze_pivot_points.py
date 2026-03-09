@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from config.settings import ETF_UNIVERSE, ACTIVE_ETFS
+from config.etf_settings import ETF_UNIVERSE, ACTIVE_ETFS
 from scripts.train_model import fetch_training_data
 
 logger.remove()

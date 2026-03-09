@@ -14,7 +14,7 @@ from loguru import logger
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
-from config.settings import ETF_UNIVERSE, ACTIVE_ETFS, INITIAL_CAPITAL
+from config.etf_settings import ETF_UNIVERSE, ACTIVE_ETFS, INITIAL_CAPITAL
 from strategy.signal import MarketSnapshot, SignalType, OrderSide, TradeOrder
 from strategy.futures_etf_arb import FuturesETFArbStrategy
 from risk.position_manager import PositionManager

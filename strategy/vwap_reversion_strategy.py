@@ -14,7 +14,7 @@ from collections import deque
 
 from strategy.base_strategy import BaseStrategy
 from strategy.signal import MarketSnapshot, TradingSignal, SignalType
-from config.settings import SIGNAL_COOLDOWN_SECONDS, MIN_SIGNAL_PERSISTENCE_COUNT
+from config.etf_settings import SIGNAL_COOLDOWN_SECONDS, MIN_SIGNAL_PERSISTENCE_COUNT
 
 # 策略特有配置
 VWAP_BUY_THRESHOLD = 0.0015   # 降低阈值到 -0.15%

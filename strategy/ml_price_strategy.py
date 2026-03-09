@@ -13,7 +13,7 @@ from loguru import logger
 from strategy.base_strategy import BaseStrategy
 from strategy.signal import MarketSnapshot, TradingSignal, SignalType
 from strategy.ml_predictor import MLPredictor, PricePrediction
-from config.settings import (
+from config.etf_settings import (
     SIGNAL_COOLDOWN_SECONDS,
     ML_PRED_CONFIDENCE_THRESHOLD,
 )

@@ -15,7 +15,7 @@ from loguru import logger
 # 路径修复
 sys.path.append('.')
 
-from config.settings import ACTIVE_ETFS, ETF_UNIVERSE
+from config.etf_settings import ACTIVE_ETFS, ETF_UNIVERSE
 from data.market_data import MarketDataService
 from strategy.composite_strategy import CompositeStrategy
 from strategy.futures_etf_arb import FuturesETFArbStrategy

@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from loguru import logger
 from strategy.signal import TradeOrder
 from risk.position_manager import PositionManager
-from config.settings import ETF_UNIVERSE
+from config.etf_settings import ETF_UNIVERSE
 
 
 class BaseTrader(ABC):

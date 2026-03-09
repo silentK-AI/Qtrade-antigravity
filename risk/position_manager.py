@@ -6,7 +6,7 @@ from typing import Optional
 from loguru import logger
 
 from strategy.signal import Position, OrderSide
-from config.settings import INITIAL_CAPITAL, ETF_COMMISSION_RATE
+from config.etf_settings import INITIAL_CAPITAL, ETF_COMMISSION_RATE
 from monitor.trade_store import TradeStore
 
 

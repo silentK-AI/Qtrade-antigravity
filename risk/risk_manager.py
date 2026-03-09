@@ -7,7 +7,7 @@ from loguru import logger
 
 from strategy.signal import MarketSnapshot, TradingSignal, SignalType, TradeOrder, OrderSide
 from risk.position_manager import PositionManager
-from config.settings import (
+from config.etf_settings import (
     TAKE_PROFIT_PCT,
     STOP_LOSS_PCT,
     TRAILING_STOP_PCT,
@@ -143,7 +143,7 @@ class RiskManager:
 
             # --- B. 盈利保卫 (Profit Guard / 保本损) ---
             # 导入配置
-            from config.settings import (
+            from config.etf_settings import (
                 PROFIT_GUARD_THRESHOLD, PROFIT_GUARD_RETRACEMENT,
                 ATR_MULTIPLIER_TP, ATR_MULTIPLIER_SL,
                 TIME_DECAY_MINUTES, STOP_LOSS_PCT

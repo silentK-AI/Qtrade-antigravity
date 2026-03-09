@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from config.settings import (
+from config.etf_settings import (
     ETF_UNIVERSE, ACTIVE_ETFS, INITIAL_CAPITAL,
     ML_MODEL_DIR,
 )

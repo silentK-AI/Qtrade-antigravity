@@ -9,7 +9,7 @@ from loguru import logger
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
-from config.settings import STOCK_ALERT_SYMBOLS
+from config.stock_settings import STOCK_ALERT_SYMBOLS
 from data.stock_data_service import StockDataService
 from strategy.technical_analyzer import TechnicalAnalyzer
 

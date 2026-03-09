@@ -12,7 +12,7 @@ from loguru import logger
 
 import pandas as pd
 
-from config.settings import (
+from config.etf_settings import (
     ETF_UNIVERSE, ACTIVE_ETFS, INITIAL_CAPITAL,
     TAKE_PROFIT_PCT, STOP_LOSS_PCT, TRAILING_STOP_PCT,
     MARKET_OPEN, MARKET_CLOSE,

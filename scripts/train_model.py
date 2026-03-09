@@ -17,7 +17,7 @@ from loguru import logger
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.settings import ETF_UNIVERSE, ACTIVE_ETFS, ML_MODEL_DIR, ML_TRAINING_DAYS
+from config.etf_settings import ETF_UNIVERSE, ACTIVE_ETFS, ML_MODEL_DIR, ML_TRAINING_DAYS
 from strategy.ml_predictor import MLPredictor
 
 

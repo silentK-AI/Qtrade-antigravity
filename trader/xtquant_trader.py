@@ -149,7 +149,7 @@ class XtQuantTrader(BaseTrader):
 
     def _format_stock_code(self, etf_code: str) -> str:
         """格式化股票代码为 xtquant 格式"""
-        from config.settings import ETF_UNIVERSE
+        from config.etf_settings import ETF_UNIVERSE
         config = ETF_UNIVERSE.get(etf_code, {})
         exchange = config.get("exchange", "SH")
         return f"{etf_code}.{exchange}"

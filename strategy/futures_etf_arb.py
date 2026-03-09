@@ -9,7 +9,7 @@ from loguru import logger
 from strategy.base_strategy import BaseStrategy
 from strategy.signal import MarketSnapshot, TradingSignal, SignalType
 from data.overnight_data import OvernightInfo
-from config.settings import (
+from config.etf_settings import (
     PREMIUM_THRESHOLD,
     DISCOUNT_THRESHOLD,
     SIGNAL_COOLDOWN_SECONDS,

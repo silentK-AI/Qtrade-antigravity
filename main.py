@@ -16,7 +16,7 @@ from datetime import datetime, time as dtime
 from loguru import logger
 
 from monitor.logger import setup_logger
-from config.settings import (
+from config.etf_settings import (
     ETF_UNIVERSE,
     ACTIVE_ETFS,
     MARKET_OPEN,
@@ -122,7 +122,7 @@ class TradingEngine:
     def _auto_train_models(self, codes: list[str]) -> None:
         """自动训练指定标的的 ML 模型"""
         from scripts.train_model import fetch_training_data
-        from config.settings import ML_TRAINING_DAYS
+        from config.etf_settings import ML_TRAINING_DAYS
 
         logger.info("=" * 40)
         logger.info(f"自动训练 ML 模型 ({len(codes)} 个标的)")
@@ -451,7 +451,7 @@ class TradingEngine:
             import requests
             import pandas as pd
             from datetime import timedelta
-            from config.settings import ETF_UNIVERSE
+            from config.etf_settings import ETF_UNIVERSE
 
             # 计算日期范围
             end_date = datetime.now().strftime("%Y%m%d")

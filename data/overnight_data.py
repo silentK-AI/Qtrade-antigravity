@@ -15,7 +15,7 @@ import requests as _req
 from loguru import logger
 
 from data.data_cache import DataCache
-from config.settings import ETF_UNIVERSE
+from config.etf_settings import ETF_UNIVERSE
 
 
 @dataclass

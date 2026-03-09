@@ -9,7 +9,7 @@ from collections import deque
 import pandas as pd
 from loguru import logger
 
-from config.settings import ETF_UNIVERSE, ACTIVE_ETFS, FUTURES_MOMENTUM_WINDOW
+from config.etf_settings import ETF_UNIVERSE, ACTIVE_ETFS, FUTURES_MOMENTUM_WINDOW
 from strategy.signal import MarketSnapshot
 from data.data_cache import DataCache
 from data.iopv_calculator import IOPVCalculator

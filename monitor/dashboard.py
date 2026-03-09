@@ -101,7 +101,7 @@ def create_app(trade_store: TradeStore = None) -> Flask:
     @app.route("/api/config")
     def api_config():
         """输出当前系统配置（标的列表等）"""
-        from config.settings import ACTIVE_ETFS, ETF_UNIVERSE
+        from config.etf_settings import ACTIVE_ETFS, ETF_UNIVERSE
         etfs = []
         for code in ACTIVE_ETFS:
             info = ETF_UNIVERSE.get(code, {})
