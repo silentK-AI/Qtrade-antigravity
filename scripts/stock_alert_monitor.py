@@ -28,7 +28,7 @@ sys.path.append(BASE_DIR)
 # 加载环境变量
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(BASE_DIR, ".env"))
+    load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 except ImportError:
     pass
 

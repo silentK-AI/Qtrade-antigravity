@@ -4,7 +4,9 @@ ETF T+0 量化交易系统 - 全局配置
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(BASE_DIR, ".env")
+load_dotenv(env_path, override=True)
 
 # ============================================================
 #  交易标的池
