@@ -20,7 +20,7 @@ import numpy as np
 import requests as _req
 from loguru import logger
 
-from config.settings import STOCK_ALERT_SYMBOLS, ALERT_HISTORY_DAYS
+from config.stock_settings import STOCK_ALERT_SYMBOLS, ALERT_HISTORY_DAYS
 from data.data_cache import DataCache
 
 

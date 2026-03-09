@@ -34,7 +34,7 @@ except ImportError:
 
 from loguru import logger
 
-from config.settings import (
+from config.stock_settings import (
     STOCK_ALERT_SYMBOLS,
     ALERT_PREMARKET_TIME,
     ALERT_SCAN_INTERVAL,

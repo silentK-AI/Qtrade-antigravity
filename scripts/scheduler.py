@@ -28,8 +28,6 @@ from config.settings import ACTIVE_ETFS
 
 # 记录当前运行的交易进程引用
 current_trading_process = None
-# 记录当前运行的股票监控进程引用
-current_alert_process = None
 
 def setup_scheduler_logger():
     logger.remove()
@@ -120,61 +118,6 @@ def job_stop_trading():
     else:
         logger.info("没有发现正在运行的交易进程。")
 
-# ------------------------------------------------------------------
-#  个股监控进程管理
-# ------------------------------------------------------------------
-
-def job_start_alert_monitor():
-    """每天 08:30 启动个股技术指标监控"""
-    if datetime.now().weekday() >= 5:
-        logger.info("今天是周末，跳过个股监控启动。")
-        return
-
-    global current_alert_process
-
-    if current_alert_process and current_alert_process.poll() is None:
-        logger.warning("监控进程已在运行，尝试先杀掉旧进程...")
-        current_alert_process.terminate()
-        current_alert_process.wait()
-
-    logger.info("=== 触发: 启动个股技术指标监控 ===")
-
-    cmd = [sys.executable, "scripts/stock_alert_monitor.py"]
-
-    try:
-        current_alert_process = subprocess.Popen(
-            cmd,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
-        )
-        logger.info(f"监控进程已在后台启动 (PID: {current_alert_process.pid})")
-    except Exception as e:
-        logger.error(f"启动监控进程失败: {e}")
-
-
-def job_stop_alert_monitor():
-    """每天 16:10 终止个股监控进程"""
-    if datetime.now().weekday() >= 5:
-        return
-
-    global current_alert_process
-
-    logger.info("=== 触发: 终止个股监控 ===")
-    if current_alert_process and current_alert_process.poll() is None:
-        logger.info(f"正在向监控进程 (PID: {current_alert_process.pid}) 发送终止信号...")
-        current_alert_process.terminate()
-
-        try:
-            current_alert_process.wait(timeout=15)
-            logger.info("监控进程已优雅关闭。")
-        except subprocess.TimeoutExpired:
-            current_alert_process.kill()
-            logger.info("监控进程已被强制杀死。")
-
-        current_alert_process = None
-    else:
-        logger.info("没有发现正在运行的监控进程。")
-
 
 def start_scheduler():
     setup_scheduler_logger()
@@ -183,11 +126,9 @@ def start_scheduler():
     logger.info("=====================================")
     
     # 设定定时任务
-    schedule.every().day.at("08:30").do(job_start_alert_monitor)
     schedule.every().day.at("09:00").do(job_train_model)
     schedule.every().day.at("09:25").do(job_start_trading)
     schedule.every().day.at("15:05").do(job_stop_trading)
-    schedule.every().day.at("16:10").do(job_stop_alert_monitor)
     
     # 打印当前所有排期的任务
     logger.info("当前设定的定时任务:")
@@ -205,9 +146,6 @@ def start_scheduler():
         if current_trading_process and current_trading_process.poll() is None:
             logger.info("正在清理附带的交易进程...")
             current_trading_process.terminate()
-        if current_alert_process and current_alert_process.poll() is None:
-            logger.info("正在清理附带的监控进程...")
-            current_alert_process.terminate()
         logger.info("调度器已退出。")
 
 if __name__ == "__main__":
