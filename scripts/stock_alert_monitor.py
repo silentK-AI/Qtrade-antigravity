@@ -63,8 +63,8 @@ class StockAlertMonitor:
         self._klines_cache: dict = {}
         # 上一次技术报告: {symbol: TechnicalReport}
         self._prev_reports: dict[str, TechnicalReport] = {}
-        # 信号冷却: {symbol_signaltype: timestamp}
-        self._signal_cooldown: dict[str, float] = {}
+        # 信号冷却: {symbol_signaltype: (timestamp, reason)}
+        self._signal_cooldown: dict[str, tuple[float, str]] = {}
 
     # ------------------------------------------------------------------
     #  主流程
@@ -333,15 +333,24 @@ class StockAlertMonitor:
         return result
 
     def _is_signal_cooling(self, signal: AlertSignal) -> bool:
-        """检查信号是否在冷却期"""
+        """检查信号是否在冷却期。如果是相同类型的信号，但触发原因不同，则不冷却（立即推送）。"""
         key = f"{signal.symbol}_{signal.signal_type}"
-        last_time = self._signal_cooldown.get(key, 0)
+        if key not in self._signal_cooldown:
+            return False
+            
+        last_time, last_reason = self._signal_cooldown[key]
+        
+        # 如果原因不同，说明情况有变，不冷却
+        if last_reason != signal.reason:
+            logger.debug(f"[{signal.symbol}] {signal.signal_type} 触发新原因: {signal.reason} (原: {last_reason}) -> 绕过冷却")
+            return False
+            
         return (time.time() - last_time) < ALERT_SIGNAL_COOLDOWN
 
     def _update_signal_cooldown(self, signal: AlertSignal):
-        """更新信号冷却时间"""
+        """更新信号冷却时间和原因"""
         key = f"{signal.symbol}_{signal.signal_type}"
-        self._signal_cooldown[key] = time.time()
+        self._signal_cooldown[key] = (time.time(), signal.reason)
 
     @staticmethod
     def _setup_logger():
