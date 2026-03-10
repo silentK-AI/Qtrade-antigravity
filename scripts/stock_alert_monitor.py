@@ -81,6 +81,8 @@ class StockAlertMonitor:
         logger.info("  个股技术指标监控器启动")
         logger.info(f"  模式: {mode}")
         logger.info(f"  监控标的: {len(STOCK_ALERT_SYMBOLS)} 只")
+        logger.info(f"  工作目录: {os.getcwd()}")
+        logger.info(f"  Python 解释器: {sys.executable}")
         logger.info("====================================")
 
         if mode in ("full", "premarket"):

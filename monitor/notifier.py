@@ -6,8 +6,8 @@ import smtplib
 from email.mime.text import MIMEText
 from typing import Optional
 from loguru import logger
-
 import requests
+from dotenv import load_dotenv
 
 
 class Notifier:
@@ -20,12 +20,21 @@ class Notifier:
     """
 
     def __init__(self):
+        # 确保环境变量已加载
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        load_dotenv(os.path.join(base_dir, ".env"), override=True)
+
         self._serverchan_key = os.getenv("SERVERCHAN_KEY", "")
         self._smtp_host = os.getenv("SMTP_HOST", "")
         self._smtp_port = int(os.getenv("SMTP_PORT", "465"))
         self._smtp_user = os.getenv("SMTP_USER", "")
         self._smtp_pass = os.getenv("SMTP_PASS", "")
         self._notify_email = os.getenv("NOTIFY_EMAIL", "")
+
+        if self._serverchan_key:
+            logger.debug(f"Notifier: Server酱已配置 (Key前缀: {self._serverchan_key[:4]})")
+        else:
+            logger.warning("Notifier: Server酱密钥 (SERVERCHAN_KEY) 未配置！")
 
     def send(self, title: str, content: str) -> None:
         """发送通知（同时发送所有已配置的渠道）"""
