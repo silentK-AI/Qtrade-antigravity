@@ -20,9 +20,9 @@ class Notifier:
     """
 
     def __init__(self):
-        # 确保环境变量已加载
+        # 确保环境变量已加载，encoding='utf-8-sig' 兼容 Windows PowerShell 生成的 BOM 文件
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        load_dotenv(os.path.join(base_dir, ".env"), override=True)
+        load_dotenv(os.path.join(base_dir, ".env"), override=True, encoding="utf-8-sig")
 
         self._serverchan_key = os.getenv("SERVERCHAN_KEY", "")
         self._smtp_host = os.getenv("SMTP_HOST", "")

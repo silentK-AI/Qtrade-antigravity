@@ -28,7 +28,8 @@ sys.path.append(BASE_DIR)
 # 加载环境变量
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
+    # encoding='utf-8-sig' 可以自动处理 Windows PowerShell 生成的 UTF-8 BOM 文件
+    load_dotenv(os.path.join(BASE_DIR, ".env"), override=True, encoding="utf-8-sig")
 except ImportError:
     pass
 
