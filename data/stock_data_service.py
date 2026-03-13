@@ -760,7 +760,13 @@ class StockDataService:
         # --- 源1: 韭圈儿（走系统代理）---
         try:
             url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
-            resp = proxy_http.get(url, timeout=8)
+            proxy_http.headers.update({
+                "Referer": "https://www.jiucaishuo.com/",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Origin": "https://www.jiucaishuo.com",
+            })
+            resp = proxy_http.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == 0 and "data" in data:
