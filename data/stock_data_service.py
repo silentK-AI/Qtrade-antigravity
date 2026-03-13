@@ -83,9 +83,23 @@ class StockDataService:
 
     @staticmethod
     def _create_direct_session():
-        """创建绕过系统代理的 requests.Session"""
+        """创建绕过系统代理的 requests.Session（用于腾讯/新浪行情等白名单域名）"""
         s = _req.Session()
         s.trust_env = False
+        s.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        })
+        return s
+
+    @staticmethod
+    def _create_proxy_session():
+        """创建走系统代理的 requests.Session（用于需要代理的外部域名）"""
+        s = _req.Session()
+        s.trust_env = True
         s.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -610,11 +624,13 @@ class StockDataService:
         """
         获取 VIX / VXN / OVX 恐慌指数。
         数据源优先级:
-          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（国内直连，A股交易时段最快）
-          2. Yahoo Finance v8 API（需代理/境外网络）
+          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（走系统代理）
+          2. Yahoo Finance v8 API（走系统代理）
           3. akshare index_vix_weeklyfutures（备用）
         """
-        # --- 源1: 新浪行情（直连，无代理）---
+        proxy_http = self._create_proxy_session()
+
+        # --- 源1: 新浪行情（走系统代理）---
         sina_map = {
             "hf_VIX": ("vix", "vix_change_pct"),
             "hf_VXN": ("vxn", "vxn_change_pct"),
@@ -624,8 +640,8 @@ class StockDataService:
         try:
             codes = ",".join(sina_map.keys())
             url = f"https://hq.sinajs.cn/list={codes}"
-            self._http.headers["Referer"] = "https://finance.sina.com.cn"
-            resp = self._http.get(url, timeout=8)
+            proxy_http.headers["Referer"] = "https://finance.sina.com.cn"
+            resp = proxy_http.get(url, timeout=8)
             resp.encoding = "gbk"
             text = resp.text.strip()
             for line in text.split("\n"):
@@ -671,11 +687,7 @@ class StockDataService:
         needs_yahoo = [k for k, (pa, _) in yahoo_map.items() if not got.get(pa)]
         if needs_yahoo:
             try:
-                import requests as _req2
-                proxy_sess = _req2.Session()
-                proxy_sess.trust_env = True  # 使用系统代理
-                proxy_sess.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                proxy_http.headers.update({
                     "Accept": "application/json",
                     "Referer": "https://finance.yahoo.com",
                 })
@@ -683,13 +695,12 @@ class StockDataService:
                     if got.get(price_attr):
                         continue
                     try:
-                        # 先访问主页获取 cookie
                         try:
-                            proxy_sess.get("https://finance.yahoo.com", timeout=5)
+                            proxy_http.get("https://finance.yahoo.com", timeout=5)
                         except Exception:
                             pass
                         yurl = f"https://query1.finance.yahoo.com/v8/finance/chart/{ycode}?interval=1d&range=5d"
-                        yr = proxy_sess.get(yurl, timeout=10)
+                        yr = proxy_http.get(yurl, timeout=10)
                         if yr.status_code != 200 or not yr.text.strip():
                             logger.debug(f"Yahoo {ycode} 返回空: status={yr.status_code}")
                             continue
@@ -711,7 +722,7 @@ class StockDataService:
             except Exception as e:
                 logger.debug(f"Yahoo VIX 整体失败: {e}")
 
-        # --- 源3: akshare（仅 VIX，备用，尝试多个可能的接口名）---
+        # --- 源3: akshare（仅 VIX，备用）---
         if not got.get("vix"):
             try:
                 import akshare as ak
@@ -742,12 +753,14 @@ class StockDataService:
         数据源优先级:
           1. 韭圈儿 open API（A股本土化，0-100）
           2. alternative.me Fear & Greed（全球加密/股市，0-100）
-          3. akshare 技术面自算（基于大盘指标估算）
+          3. 基于大盘涨跌家数估算（兜底）
         """
-        # --- 源1: 韭圈儿（直连）---
+        proxy_http = self._create_proxy_session()
+
+        # --- 源1: 韭圈儿（走系统代理）---
         try:
             url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
-            resp = self._http.get(url, timeout=8)
+            resp = proxy_http.get(url, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == 0 and "data" in data:
@@ -764,18 +777,13 @@ class StockDataService:
 
         # --- 源2: alternative.me（走系统代理）---
         try:
-            import requests as _req2
-            proxy_sess = _req2.Session()
-            proxy_sess.trust_env = True
-            proxy_sess.headers["User-Agent"] = "Mozilla/5.0"
-            resp2 = proxy_sess.get("https://api.alternative.me/fng/?limit=1", timeout=8)
+            resp2 = proxy_http.get("https://api.alternative.me/fng/?limit=1", timeout=8)
             if resp2.status_code == 200:
                 data2 = resp2.json()
                 items = data2.get("data", [])
                 if items:
                     idx = int(items[0].get("value", -1))
                     raw_label = str(items[0].get("value_classification", ""))
-                    # 英文 → 中文
                     label_map = {
                         "Extreme Fear": "极度恐慌",
                         "Fear": "恐慌",
