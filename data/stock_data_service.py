@@ -624,11 +624,145 @@ class StockDataService:
         """
         获取 VIX / VXN / OVX 恐慌指数。
         数据源优先级:
-          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（走系统代理）
-          2. Yahoo Finance v8 API（走系统代理）
+          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（直连，服务端/本地均可）
+          2. Yahoo Finance v8 API（走系统代理，仅本地有代理时可用）
           3. akshare index_vix_weeklyfutures（备用）
         """
-        proxy_http = self._create_proxy_session()
+        direct_http = self._http           # trust_env=False，直连
+        proxy_http = self._create_proxy_session()  # trust_env=True，走系统代理
+
+        # --- 源1: 新浪行情（直连优先，服务端/本地均适用）---
+        sina_map = {
+            "hf_VIX": ("vix", "vix_change_pct"),
+            "hf_VXN": ("vxn", "vxn_change_pct"),
+            "hf_OVX": ("ovx", "ovx_change_pct"),
+        }
+        got = {"vix": False, "vxn": False, "ovx": False}
+        try:
+            codes = ",".join(sina_map.keys())
+            url = f"https://hq.sinajs.cn/list={codes}"
+            # 先尝试直连（服务端友好），失败再走代理
+            for sess in [direct_http, proxy_http]:
+                try:
+                    sess.headers["Referer"] = "https://finance.sina.com.cn"
+                    resp = sess.get(url, timeout=8)
+                    resp.encoding = "gbk"
+                    text = resp.text.strip()
+                    if not text or "FAILED" in text:
+                        continue
+                    parsed_any = False
+                    for line in text.split("\n"):
+                        line = line.strip().rstrip(";")
+                        if "=" not in line:
+                            continue
+                        var_name, _, raw = line.partition("=")
+                        raw = raw.strip('"')
+                        parts = raw.split(",")
+                        if not parts or not parts[0]:
+                            continue
+                        for sina_code, (price_attr, chg_attr) in sina_map.items():
+                            if sina_code.lower() in var_name.lower():
+                                try:
+                                    price = float(parts[0])
+                                    if price <= 0:
+                                        break
+                                    prev_close = float(parts[7]) if len(parts) > 7 and parts[7] else 0.0
+                                    chg_pct = 0.0
+                                    if prev_close > 0:
+                                        chg_pct = (price - prev_close) / prev_close * 100
+                                    if len(parts) > 2 and parts[2]:
+                                        try:
+                                            chg_pct = float(parts[2])
+                                        except ValueError:
+                                            pass
+                                    setattr(sentiment, price_attr, round(price, 2))
+                                    setattr(sentiment, chg_attr, round(chg_pct, 2))
+                                    got[price_attr] = True
+                                    parsed_any = True
+                                    logger.debug(f"[新浪] {sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
+                                except (ValueError, IndexError):
+                                    pass
+                                break
+                    if parsed_any:
+                        break  # 直连成功，不需要再走代理
+                except Exception as e:
+                    logger.debug(f"新浪 VIX session 尝试失败: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"新浪 VIX/VXN/OVX 失败: {e}")
+
+        # --- 源2: Yahoo Finance（走系统代理，无代理环境跳过）---
+        needs_yahoo = [k for k, (pa, _) in {
+            "%5EVIX": ("vix", "vix_change_pct"),
+            "%5EVXN": ("vxn", "vxn_change_pct"),
+            "%5EOVX": ("ovx", "ovx_change_pct"),
+        }.items() if not got.get(pa)]
+        if needs_yahoo:
+            yahoo_map = {
+                "%5EVIX": ("vix", "vix_change_pct"),
+                "%5EVXN": ("vxn", "vxn_change_pct"),
+                "%5EOVX": ("ovx", "ovx_change_pct"),
+            }
+            try:
+                proxy_http.headers.update({
+                    "Accept": "application/json",
+                    "Referer": "https://finance.yahoo.com",
+                })
+                for ycode, (price_attr, chg_attr) in yahoo_map.items():
+                    if got.get(price_attr):
+                        continue
+                    try:
+                        try:
+                            proxy_http.get("https://finance.yahoo.com", timeout=5)
+                        except Exception:
+                            pass
+                        yurl = f"https://query1.finance.yahoo.com/v8/finance/chart/{ycode}?interval=1d&range=5d"
+                        yr = proxy_http.get(yurl, timeout=10)
+                        if yr.status_code != 200 or not yr.text.strip():
+                            logger.debug(f"Yahoo {ycode} 返回空: status={yr.status_code}")
+                            continue
+                        yd = yr.json()
+                        result = yd["chart"]["result"][0]
+                        closes = result["indicators"]["quote"][0]["close"]
+                        closes = [c for c in closes if c is not None]
+                        if len(closes) >= 1:
+                            price = round(closes[-1], 2)
+                            chg_pct = 0.0
+                            if len(closes) >= 2 and closes[-2]:
+                                chg_pct = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
+                            setattr(sentiment, price_attr, price)
+                            setattr(sentiment, chg_attr, chg_pct)
+                            got[price_attr] = True
+                            logger.debug(f"[Yahoo] {ycode}: {price:.2f} ({chg_pct:+.2f}%)")
+                    except Exception as ye:
+                        logger.debug(f"Yahoo {ycode} 失败: {ye}")
+            except Exception as e:
+                logger.debug(f"Yahoo VIX 整体失败: {e}")
+
+        # --- 源3: akshare（仅 VIX，备用）---
+        if not got.get("vix"):
+            try:
+                import akshare as ak
+                df_vix = None
+                for func_name in ["index_vix_weeklyfutures", "futures_vix_baidu", "index_option_50etf_qvix"]:
+                    try:
+                        fn = getattr(ak, func_name, None)
+                        if fn:
+                            df_vix = fn()
+                            break
+                    except Exception:
+                        continue
+                if df_vix is not None and not df_vix.empty:
+                    last = df_vix.iloc[-1]
+                    price_col = [c for c in df_vix.columns if "收盘" in c or "close" in c.lower() or "vix" in c.lower()]
+                    if price_col:
+                        price = float(last[price_col[0]])
+                        if price > 0:
+                            sentiment.vix = round(price, 2)
+                            got["vix"] = True
+                            logger.debug(f"[akshare] VIX: {price:.2f}")
+            except Exception as e:
+                logger.debug(f"akshare VIX 失败: {e}")
 
         # --- 源1: 新浪行情（走系统代理）---
         sina_map = {
@@ -751,37 +885,44 @@ class StockDataService:
         """
         获取恐贪指数（A股/全球）。
         数据源优先级:
-          1. 韭圈儿 open API（A股本土化，0-100）
-          2. alternative.me Fear & Greed（全球加密/股市，0-100）
-          3. 基于大盘涨跌家数估算（兜底）
+          1. 韭圈儿 open API（先直连，失败再走代理）
+          2. alternative.me Fear & Greed（走系统代理，无代理环境跳过）
+          3. 基于大盘涨跌家数估算（兜底，始终可用）
         """
+        direct_http = self._http
         proxy_http = self._create_proxy_session()
 
-        # --- 源1: 韭圈儿（走系统代理）---
+        # --- 源1: 韭圈儿（先直连，失败再走代理）---
         try:
             url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
-            proxy_http.headers.update({
+            headers = {
                 "Referer": "https://www.jiucaishuo.com/",
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "Origin": "https://www.jiucaishuo.com",
-            })
-            resp = proxy_http.get(url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == 0 and "data" in data:
-                    d = data["data"]
-                    idx = int(d.get("index", -1))
-                    label = str(d.get("label") or d.get("name") or "")
-                    if idx >= 0:
-                        sentiment.fear_greed = idx
-                        sentiment.fear_greed_label = label
-                        logger.debug(f"[韭圈儿] 恐贪指数: {idx} ({label})")
-                        return
+            }
+            for sess in [direct_http, proxy_http]:
+                try:
+                    sess.headers.update(headers)
+                    resp = sess.get(url, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("code") == 0 and "data" in data:
+                            d = data["data"]
+                            idx = int(d.get("index", -1))
+                            label = str(d.get("label") or d.get("name") or "")
+                            if idx >= 0:
+                                sentiment.fear_greed = idx
+                                sentiment.fear_greed_label = label
+                                logger.debug(f"[韭圈儿] 恐贪指数: {idx} ({label})")
+                                return
+                except Exception as e:
+                    logger.debug(f"韭圈儿 session 尝试失败: {e}")
+                    continue
         except Exception as e:
             logger.debug(f"韭圈儿恐贪指数失败: {e}")
 
-        # --- 源2: alternative.me（走系统代理）---
+        # --- 源2: alternative.me（走系统代理，无代理环境会失败，有兜底）---
         try:
             resp2 = proxy_http.get("https://api.alternative.me/fng/?limit=1", timeout=8)
             if resp2.status_code == 200:
