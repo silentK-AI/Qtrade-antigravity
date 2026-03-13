@@ -134,7 +134,7 @@ class PositionManager:
 
         self._record_trade(etf_code, etf_name, OrderSide.BUY, price, quantity, commission=commission, reason=reason, timestamp=timestamp)
         logger.info(
-            f"[{etf_code}] 买入 {quantity}股 @ {price:.4f} | "
+            f"[{etf_code}] 买入 {quantity}股 @ {price:.3f} | "
             f"佣金: {commission:.2f} | 现金余额: {self._cash:.2f}"
         )
         return True
@@ -184,7 +184,7 @@ class PositionManager:
 
         self._record_trade(etf_code, pos.etf_name, OrderSide.SELL, price, sell_qty, commission=commission, pnl=pnl, reason=reason, timestamp=timestamp)
         logger.info(
-            f"[{etf_code}] 卖出 {sell_qty}股 @ {price:.4f} | "
+            f"[{etf_code}] 卖出 {sell_qty}股 @ {price:.3f} | "
             f"佣金: {commission:.2f} | 盈亏: {pnl:+.2f} ({pnl_pct:+.2f}%) | "
             f"现金余额: {self._cash:.2f}"
         )

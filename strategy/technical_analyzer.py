@@ -204,10 +204,10 @@ class TechnicalAnalyzer:
 
         # 条件 1: 价格接近支撑位
         if report.support_s2 > 0 and price <= report.support_s2 * 1.005:
-            buy_reasons.append(f"触及S2支撑位 {report.support_s2:.2f}")
+            buy_reasons.append(f"触及S2支撑位 {report.support_s2:.3f}")
             buy_strength += 0.35
         elif report.support_s1 > 0 and price <= report.support_s1 * 1.005:
-            buy_reasons.append(f"触及S1支撑位 {report.support_s1:.2f}")
+            buy_reasons.append(f"触及S1支撑位 {report.support_s1:.3f}")
             buy_strength += 0.25
 
         # 条件 2: RSI 超卖
@@ -227,7 +227,7 @@ class TechnicalAnalyzer:
 
         # 条件 4: 布林带下轨附近
         if report.boll_lower > 0 and price <= report.boll_lower * 1.005:
-            buy_reasons.append(f"触及布林下轨 {report.boll_lower:.2f}")
+            buy_reasons.append(f"触及布林下轨 {report.boll_lower:.3f}")
             buy_strength += 0.20
 
         # 条件 5: KDJ 超卖金叉
@@ -253,11 +253,11 @@ class TechnicalAnalyzer:
         tp_strength = 0.0
 
         if report.resistance_r1 > 0 and price >= report.resistance_r1 * 0.998:
-            tp_reasons.append(f"触及R1压力位 {report.resistance_r1:.2f}")
+            tp_reasons.append(f"触及R1压力位 {report.resistance_r1:.3f}")
             tp_strength += 0.30
 
         if report.resistance_r2 > 0 and price >= report.resistance_r2 * 0.998:
-            tp_reasons.append(f"超越R2压力位 {report.resistance_r2:.2f}")
+            tp_reasons.append(f"超越R2压力位 {report.resistance_r2:.3f}")
             tp_strength += 0.20
 
         if report.rsi_14 > 75:
@@ -268,7 +268,7 @@ class TechnicalAnalyzer:
             tp_strength += 0.10
 
         if report.boll_upper > 0 and price >= report.boll_upper * 0.998:
-            tp_reasons.append(f"触及布林上轨 {report.boll_upper:.2f}")
+            tp_reasons.append(f"触及布林上轨 {report.boll_upper:.3f}")
             tp_strength += 0.20
 
         if prev_report and report.macd_hist < 0 and prev_report.macd_hist >= 0:
@@ -289,13 +289,13 @@ class TechnicalAnalyzer:
         sl_reasons = []
 
         if report.support_s2 > 0 and price < report.support_s2 * 0.995:
-            sl_reasons.append(f"跌破S2支撑位 {report.support_s2:.2f}")
+            sl_reasons.append(f"跌破S2支撑位 {report.support_s2:.3f}")
 
         if report.rsi_14 < 20:
             sl_reasons.append(f"RSI={report.rsi_14:.1f} 极端超卖")
 
         if report.boll_lower > 0 and price < report.boll_lower * 0.99:
-            sl_reasons.append(f"跌破布林下轨 {report.boll_lower:.2f}")
+            sl_reasons.append(f"跌破布林下轨 {report.boll_lower:.3f}")
 
         if len(sl_reasons) >= 2:
             signals.append(AlertSignal(
@@ -604,12 +604,12 @@ class TechnicalAnalyzer:
         rsi_icon = "🔴" if report.rsi_status == "超买" else "🟢" if report.rsi_status in ("超卖", "偏弱") else "⚪"
 
         lines = [
-            f"**【{report.symbol} {report.name}】** {change_icon} ¥{report.price:.2f} ({report.change_pct:+.2f}%)",
+            f"**【{report.symbol} {report.name}】** {change_icon} ¥{report.price:.3f} ({report.change_pct:+.2f}%)",
             f"━━━━━━━━━━━━━━━━━",
             f"📌 **支撑/压力位**",
-            f"  压力: R2={report.resistance_r2:.2f}  R1={report.resistance_r1:.2f}",
-            f"  轴心: PP={report.pivot_point:.2f}",
-            f"  支撑: S1={report.support_s1:.2f}  S2={report.support_s2:.2f}",
+            f"  压力: R2={report.resistance_r2:.3f}  R1={report.resistance_r1:.3f}",
+            f"  轴心: PP={report.pivot_point:.3f}",
+            f"  支撑: S1={report.support_s1:.3f}  S2={report.support_s2:.3f}",
             f"",
             f"📊 **核心指标**",
             f"  {rsi_icon} RSI(14): {report.rsi_14:.1f} ({report.rsi_status})",
@@ -617,12 +617,12 @@ class TechnicalAnalyzer:
             f"  KDJ: K={report.kdj_k:.0f} D={report.kdj_d:.0f} J={report.kdj_j:.0f} ({report.kdj_status})",
             f"",
             f"📈 **布林带**",
-            f"  上轨={report.boll_upper:.2f}  中轨={report.boll_middle:.2f}  下轨={report.boll_lower:.2f}",
+            f"  上轨={report.boll_upper:.3f}  中轨={report.boll_middle:.3f}  下轨={report.boll_lower:.3f}",
             f"  带宽: {report.boll_width:.1f}%",
             f"",
             f"📏 **均线**",
-            f"  5日={report.ma5:.2f}{report.ma5_trend}  10日={report.ma10:.2f}{report.ma10_trend}  20日={report.ma20:.2f}{report.ma20_trend}",
-            f"  60日={report.ma60:.2f}",
+            f"  5日={report.ma5:.3f}{report.ma5_trend}  10日={report.ma10:.3f}{report.ma10_trend}  20日={report.ma20:.3f}{report.ma20_trend}",
+            f"  60日={report.ma60:.3f}",
             f"",
             f"⚡ **波动/量价**",
             f"  ATR(14): {report.atr_14:.4f} ({report.volatility})",
@@ -644,16 +644,34 @@ class TechnicalAnalyzer:
         label = type_map.get(signal.signal_type, signal.signal_type)
 
         lines = [
-            f"**{label}** | {signal.symbol} {signal.name}",
-            f"当前价: ¥{signal.price:.2f}",
+            f"当前价: ¥{signal.price:.3f}",
         ]
 
         if signal.target_price > 0:
-            lines.append(f"目标价: ¥{signal.target_price:.2f}")
+            lines.append(f"目标价: ¥{signal.target_price:.3f}")
         if signal.stop_price > 0:
-            lines.append(f"止损价: ¥{signal.stop_price:.2f}")
+            lines.append(f"止损价: ¥{signal.stop_price:.3f}")
 
         lines.append(f"信号强度: {'★' * int(signal.strength * 5)}{'☆' * (5 - int(signal.strength * 5))}")
         lines.append(f"触发原因: {signal.reason}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def format_signal_title(signal: AlertSignal) -> str:
+        """生成推送标题：含标的名称和动作，不点开就能看到关键信息"""
+        type_map = {
+            "BUY": "买入",
+            "SELL": "卖出",
+            "TAKE_PROFIT": "止盈",
+            "STOP_LOSS": "止损",
+        }
+        action = type_map.get(signal.signal_type, signal.signal_type)
+        icon_map = {
+            "BUY": "🟢",
+            "SELL": "🔴",
+            "TAKE_PROFIT": "🟡",
+            "STOP_LOSS": "🔴",
+        }
+        icon = icon_map.get(signal.signal_type, "")
+        return f"{icon}【{action}】{signal.name}({signal.symbol}) ¥{signal.price:.3f}"

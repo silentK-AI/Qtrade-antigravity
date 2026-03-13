@@ -317,8 +317,8 @@ class TradingEngine:
         for code, info in summary["positions"].items():
             logger.info(
                 f"  [{code}] {info['name']} "
-                f"{info['qty']}股 @ {info['avg_cost']:.4f} "
-                f"-> {info['current']:.4f} "
+                f"{info['qty']}股 @ {info['avg_cost']:.3f} "
+                f"-> {info['current']:.3f} "
                 f"盈亏: {info['pnl']} ({info['pnl_pct']})"
             )
 
@@ -328,8 +328,8 @@ class TradingEngine:
             if snap and snap.is_valid:
                 logger.info(
                     f"  [{code}] {snap.etf_name} "
-                    f"价格={snap.etf_price:.4f} "
-                    f"IOPV={snap.iopv:.4f} "
+                    f"价格={snap.etf_price:.3f} "
+                    f"IOPV={snap.iopv:.3f} "
                     f"溢价率={snap.premium_rate * 100:+.2f}% "
                     f"动量={snap.futures_momentum * 100:+.3f}%"
                 )

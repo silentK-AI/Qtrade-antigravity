@@ -55,10 +55,13 @@ class Notifier:
         reason: str,
     ) -> None:
         """发送交易通知"""
-        title = f"[交易] {side} {etf_name}({etf_code})"
+        side_icon = "🟢" if side in ("BUY", "买入") else "🔴"
+        side_label = "买入" if side in ("BUY", "买入") else "卖出"
+        # 标题直接包含标的名称、动作和价格，不点开就能看到关键信息
+        title = f"{side_icon}【{side_label}】{etf_name}({etf_code}) ¥{price:.3f}"
         content = (
-            f"**{side}** {etf_name} ({etf_code})\n\n"
-            f"- 价格: {price:.4f}\n"
+            f"**{side_label}** {etf_name} ({etf_code})\n\n"
+            f"- 价格: {price:.3f}\n"
             f"- 数量: {quantity} 股\n"
             f"- 金额: {price * quantity:,.2f}\n"
             f"- 原因: {reason}\n"

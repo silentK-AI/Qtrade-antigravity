@@ -55,6 +55,15 @@ class MarketSentiment:
     north_flow: float = 0.0     # 北向资金净流入（亿元）
     gold_price: float = 0.0     # 黄金现货价格 (USD)
     gold_change_pct: float = 0.0  # 黄金涨跌幅 (%)
+    # 恐慌/情绪指数
+    vix: float = 0.0            # CBOE VIX 恐慌指数（<30常态, >30紧张, >40极端恐慌）
+    vix_change_pct: float = 0.0 # VIX 涨跌幅 (%)
+    vxn: float = 0.0            # 纳斯达克 VXN 波动率指数
+    vxn_change_pct: float = 0.0 # VXN 涨跌幅 (%)
+    ovx: float = 0.0            # 原油 ETF 波动率指数 OVX
+    ovx_change_pct: float = 0.0 # OVX 涨跌幅 (%)
+    fear_greed: int = -1        # 韭圈儿恐贪指数（0-100, -1=未获取）
+    fear_greed_label: str = ""  # 恐贪指数标签（极度恐慌/恐慌/中性/贪婪/极度贪婪）
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -534,6 +543,18 @@ class StockDataService:
         except Exception as e:
             logger.debug(f"获取北向资金失败: {e}")
 
+        # 恐慌指数 VIX / VXN / OVX
+        try:
+            self._fetch_vix_indices(sentiment)
+        except Exception as e:
+            logger.debug(f"获取恐慌指数失败: {e}")
+
+        # 韭圈儿恐贪指数
+        try:
+            self._fetch_fear_greed(sentiment)
+        except Exception as e:
+            logger.debug(f"获取韭圈儿恐贪指数失败: {e}")
+
         sentiment.timestamp = datetime.now()
         self._cache.set("market_sentiment", sentiment)
         return sentiment
@@ -584,3 +605,78 @@ class StockDataService:
                                 return
         except Exception as e:
             logger.debug(f"北向资金获取失败（akshare）: {e}")
+
+    def _fetch_vix_indices(self, sentiment: MarketSentiment):
+        """
+        通过新浪行情获取 VIX / VXN / OVX 恐慌指数。
+        新浪外盘期权波动率代码: hf_VIX, hf_VXN, hf_OVX
+        """
+        symbols = {
+            "hf_VIX": ("vix", "vix_change_pct"),
+            "hf_VXN": ("vxn", "vxn_change_pct"),
+            "hf_OVX": ("ovx", "ovx_change_pct"),
+        }
+        try:
+            codes = ",".join(symbols.keys())
+            url = f"https://hq.sinajs.cn/list={codes}"
+            self._http.headers["Referer"] = "https://finance.sina.com.cn"
+            resp = self._http.get(url, timeout=8)
+            resp.encoding = "gbk"
+            text = resp.text.strip()
+
+            for line in text.split("\n"):
+                line = line.strip().rstrip(";")
+                if "=" not in line:
+                    continue
+                var_name, _, raw = line.partition("=")
+                raw = raw.strip('"')
+                parts = raw.split(",")
+                if not parts or not parts[0]:
+                    continue
+
+                for sina_code, (price_attr, chg_attr) in symbols.items():
+                    if sina_code.lower() in var_name.lower():
+                        try:
+                            price = float(parts[0])
+                            # 新浪外盘格式: 当前价,涨跌,涨跌幅,前收...
+                            prev_close = float(parts[7]) if len(parts) > 7 and parts[7] else 0.0
+                            chg_pct = 0.0
+                            if prev_close > 0 and price > 0:
+                                chg_pct = (price - prev_close) / prev_close * 100
+                            # 也尝试直接读涨跌幅字段（部分新浪接口 parts[2] 是涨跌幅）
+                            if len(parts) > 2 and parts[2]:
+                                try:
+                                    chg_pct = float(parts[2])
+                                except ValueError:
+                                    pass
+                            setattr(sentiment, price_attr, round(price, 2))
+                            setattr(sentiment, chg_attr, round(chg_pct, 2))
+                            logger.debug(f"{sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
+                        except (ValueError, IndexError):
+                            pass
+                        break
+        except Exception as e:
+            logger.debug(f"VIX/VXN/OVX 获取失败: {e}")
+
+    def _fetch_fear_greed(self, sentiment: MarketSentiment):
+        """
+        获取韭圈儿恐贪指数（0-100 分制，A股本土化情绪指标）。
+        接口: https://open.jiucaishuo.com/api/v1/greedy_index/newest
+        """
+        try:
+            url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
+            resp = self._http.get(url, timeout=8)
+            if resp.status_code != 200:
+                return
+            data = resp.json()
+            # 响应结构: {"code":0, "data":{"index":65, "label":"贪婪", ...}}
+            if data.get("code") == 0 and "data" in data:
+                d = data["data"]
+                idx = int(d.get("index", -1))
+                label = str(d.get("label") or d.get("name") or "")
+                if idx >= 0:
+                    sentiment.fear_greed = idx
+                    sentiment.fear_greed_label = label
+                    logger.debug(f"韭圈儿恐贪指数: {idx} ({label})")
+        except Exception as e:
+            logger.debug(f"韭圈儿恐贪指数获取失败: {e}")

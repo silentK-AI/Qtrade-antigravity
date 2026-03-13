@@ -175,7 +175,71 @@ class StockAlertMonitor:
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         sections = [f"# 📊 盘前技术分析报告\n> {date_str}\n"]
 
-        # 市场环境概览
+        # ── 恐慌 / 情绪指数区块（置于报告最前）──
+        fear_lines = []
+
+        # VIX
+        if sentiment.vix > 0:
+            if sentiment.vix >= 40:
+                vix_status = "🔴 极端恐慌"
+            elif sentiment.vix >= 30:
+                vix_status = "🟠 市场紧张"
+            else:
+                vix_status = "🟢 常态"
+            vix_chg = f" ({sentiment.vix_change_pct:+.1f}%)" if sentiment.vix_change_pct != 0 else ""
+            fear_lines.append(f"  VIX 恐慌指数: **{sentiment.vix:.2f}**{vix_chg} {vix_status}")
+        else:
+            fear_lines.append("  VIX 恐慌指数: 暂无数据")
+
+        # VXN
+        if sentiment.vxn > 0:
+            if sentiment.vxn >= 40:
+                vxn_status = "🔴 科技股恐慌"
+            elif sentiment.vxn >= 30:
+                vxn_status = "🟠 偏高"
+            else:
+                vxn_status = "🟢 常态"
+            vxn_chg = f" ({sentiment.vxn_change_pct:+.1f}%)" if sentiment.vxn_change_pct != 0 else ""
+            fear_lines.append(f"  纳斯达克 VXN: **{sentiment.vxn:.2f}**{vxn_chg} {vxn_status}")
+        else:
+            fear_lines.append("  纳斯达克 VXN: 暂无数据")
+
+        # OVX
+        if sentiment.ovx > 0:
+            if sentiment.ovx >= 60:
+                ovx_status = "🔴 极高波动"
+            elif sentiment.ovx >= 40:
+                ovx_status = "🟠 偏高"
+            else:
+                ovx_status = "🟢 常态"
+            ovx_chg = f" ({sentiment.ovx_change_pct:+.1f}%)" if sentiment.ovx_change_pct != 0 else ""
+            fear_lines.append(f"  原油 OVX: **{sentiment.ovx:.2f}**{ovx_chg} {ovx_status}")
+        else:
+            fear_lines.append("  原油 OVX: 暂无数据")
+
+        # 韭圈儿恐贪指数
+        if sentiment.fear_greed >= 0:
+            fg = sentiment.fear_greed
+            if fg >= 80:
+                fg_icon = "🔴"
+            elif fg >= 60:
+                fg_icon = "🟠"
+            elif fg >= 40:
+                fg_icon = "🟡"
+            elif fg >= 20:
+                fg_icon = "🟢"
+            else:
+                fg_icon = "🔵"
+            label = sentiment.fear_greed_label or ""
+            fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
+        else:
+            fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
+
+        sections.append("### 🌡️ 全球恐慌 / 情绪指数")
+        sections.append("\n".join(fear_lines))
+        sections.append("\n")
+
+        # ── 市场环境概览 ──
         env_parts = []
         if sentiment.gold_price > 0:
             gold_icon = "↑" if sentiment.gold_change_pct > 0 else "↓"
@@ -296,9 +360,10 @@ class StockAlertMonitor:
     def _push_signals(self, signals: list[AlertSignal]):
         """推送交易信号"""
         for signal in signals:
+            title = TechnicalAnalyzer.format_signal_title(signal)
             content = TechnicalAnalyzer.format_signal(signal)
-            logger.info(f"[信号] {signal.signal_type} {signal.symbol} {signal.name} @ {signal.price:.2f}")
-            self._notifier.notify_trade_alert(content)
+            logger.info(f"[信号] {signal.signal_type} {signal.symbol} {signal.name} @ {signal.price:.3f}")
+            self._notifier.send(title, content)
             # 避免推送过快被限流
             time.sleep(1)
 
