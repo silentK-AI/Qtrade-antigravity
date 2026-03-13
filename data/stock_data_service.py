@@ -608,22 +608,26 @@ class StockDataService:
 
     def _fetch_vix_indices(self, sentiment: MarketSentiment):
         """
-        通过新浪行情获取 VIX / VXN / OVX 恐慌指数。
-        新浪外盘期权波动率代码: hf_VIX, hf_VXN, hf_OVX
+        获取 VIX / VXN / OVX 恐慌指数。
+        数据源优先级:
+          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（国内直连，A股交易时段最快）
+          2. Yahoo Finance v8 API（需代理/境外网络）
+          3. akshare index_vix_weeklyfutures（备用）
         """
-        symbols = {
+        # --- 源1: 新浪行情（直连，无代理）---
+        sina_map = {
             "hf_VIX": ("vix", "vix_change_pct"),
             "hf_VXN": ("vxn", "vxn_change_pct"),
             "hf_OVX": ("ovx", "ovx_change_pct"),
         }
+        got = {"vix": False, "vxn": False, "ovx": False}
         try:
-            codes = ",".join(symbols.keys())
+            codes = ",".join(sina_map.keys())
             url = f"https://hq.sinajs.cn/list={codes}"
             self._http.headers["Referer"] = "https://finance.sina.com.cn"
             resp = self._http.get(url, timeout=8)
             resp.encoding = "gbk"
             text = resp.text.strip()
-
             for line in text.split("\n"):
                 line = line.strip().rstrip(";")
                 if "=" not in line:
@@ -633,17 +637,16 @@ class StockDataService:
                 parts = raw.split(",")
                 if not parts or not parts[0]:
                     continue
-
-                for sina_code, (price_attr, chg_attr) in symbols.items():
+                for sina_code, (price_attr, chg_attr) in sina_map.items():
                     if sina_code.lower() in var_name.lower():
                         try:
                             price = float(parts[0])
-                            # 新浪外盘格式: 当前价,涨跌,涨跌幅,前收...
+                            if price <= 0:
+                                break
                             prev_close = float(parts[7]) if len(parts) > 7 and parts[7] else 0.0
                             chg_pct = 0.0
-                            if prev_close > 0 and price > 0:
+                            if prev_close > 0:
                                 chg_pct = (price - prev_close) / prev_close * 100
-                            # 也尝试直接读涨跌幅字段（部分新浪接口 parts[2] 是涨跌幅）
                             if len(parts) > 2 and parts[2]:
                                 try:
                                     chg_pct = float(parts[2])
@@ -651,32 +654,143 @@ class StockDataService:
                                     pass
                             setattr(sentiment, price_attr, round(price, 2))
                             setattr(sentiment, chg_attr, round(chg_pct, 2))
-                            logger.debug(f"{sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
+                            got[price_attr] = True
+                            logger.debug(f"[新浪] {sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
                         except (ValueError, IndexError):
                             pass
                         break
         except Exception as e:
-            logger.debug(f"VIX/VXN/OVX 获取失败: {e}")
+            logger.debug(f"新浪 VIX/VXN/OVX 失败: {e}")
+
+        # --- 源2: Yahoo Finance（走系统代理）---
+        yahoo_map = {
+            "%5EVIX": ("vix", "vix_change_pct"),
+            "%5EVXN": ("vxn", "vxn_change_pct"),
+            "%5EOVX": ("ovx", "ovx_change_pct"),
+        }
+        needs_yahoo = [k for k, (pa, _) in yahoo_map.items() if not got.get(pa)]
+        if needs_yahoo:
+            try:
+                import requests as _req2
+                proxy_sess = _req2.Session()
+                proxy_sess.trust_env = True  # 使用系统代理
+                proxy_sess.headers["User-Agent"] = "Mozilla/5.0"
+                for ycode, (price_attr, chg_attr) in yahoo_map.items():
+                    if got.get(price_attr):
+                        continue
+                    try:
+                        yurl = f"https://query1.finance.yahoo.com/v8/finance/chart/{ycode}?interval=1d&range=5d"
+                        yr = proxy_sess.get(yurl, timeout=10)
+                        yd = yr.json()
+                        result = yd["chart"]["result"][0]
+                        closes = result["indicators"]["quote"][0]["close"]
+                        closes = [c for c in closes if c is not None]
+                        if len(closes) >= 1:
+                            price = round(closes[-1], 2)
+                            chg_pct = 0.0
+                            if len(closes) >= 2 and closes[-2]:
+                                chg_pct = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
+                            setattr(sentiment, price_attr, price)
+                            setattr(sentiment, chg_attr, chg_pct)
+                            got[price_attr] = True
+                            logger.debug(f"[Yahoo] {ycode}: {price:.2f} ({chg_pct:+.2f}%)")
+                    except Exception as ye:
+                        logger.debug(f"Yahoo {ycode} 失败: {ye}")
+            except Exception as e:
+                logger.debug(f"Yahoo VIX 整体失败: {e}")
+
+        # --- 源3: akshare（仅 VIX，备用）---
+        if not got.get("vix"):
+            try:
+                import akshare as ak
+                df_vix = ak.index_vix_weeklyfutures()
+                if df_vix is not None and not df_vix.empty:
+                    last = df_vix.iloc[-1]
+                    price_col = [c for c in df_vix.columns if "收盘" in c or "close" in c.lower()]
+                    if price_col:
+                        price = float(last[price_col[0]])
+                        if price > 0:
+                            sentiment.vix = round(price, 2)
+                            got["vix"] = True
+                            logger.debug(f"[akshare] VIX: {price:.2f}")
+            except Exception as e:
+                logger.debug(f"akshare VIX 失败: {e}")
 
     def _fetch_fear_greed(self, sentiment: MarketSentiment):
         """
-        获取韭圈儿恐贪指数（0-100 分制，A股本土化情绪指标）。
-        接口: https://open.jiucaishuo.com/api/v1/greedy_index/newest
+        获取恐贪指数（A股/全球）。
+        数据源优先级:
+          1. 韭圈儿 open API（A股本土化，0-100）
+          2. alternative.me Fear & Greed（全球加密/股市，0-100）
+          3. akshare 技术面自算（基于大盘指标估算）
         """
+        # --- 源1: 韭圈儿（直连）---
         try:
             url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
             resp = self._http.get(url, timeout=8)
-            if resp.status_code != 200:
-                return
-            data = resp.json()
-            # 响应结构: {"code":0, "data":{"index":65, "label":"贪婪", ...}}
-            if data.get("code") == 0 and "data" in data:
-                d = data["data"]
-                idx = int(d.get("index", -1))
-                label = str(d.get("label") or d.get("name") or "")
-                if idx >= 0:
-                    sentiment.fear_greed = idx
-                    sentiment.fear_greed_label = label
-                    logger.debug(f"韭圈儿恐贪指数: {idx} ({label})")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0 and "data" in data:
+                    d = data["data"]
+                    idx = int(d.get("index", -1))
+                    label = str(d.get("label") or d.get("name") or "")
+                    if idx >= 0:
+                        sentiment.fear_greed = idx
+                        sentiment.fear_greed_label = label
+                        logger.debug(f"[韭圈儿] 恐贪指数: {idx} ({label})")
+                        return
         except Exception as e:
-            logger.debug(f"韭圈儿恐贪指数获取失败: {e}")
+            logger.debug(f"韭圈儿恐贪指数失败: {e}")
+
+        # --- 源2: alternative.me（走系统代理）---
+        try:
+            import requests as _req2
+            proxy_sess = _req2.Session()
+            proxy_sess.trust_env = True
+            proxy_sess.headers["User-Agent"] = "Mozilla/5.0"
+            resp2 = proxy_sess.get("https://api.alternative.me/fng/?limit=1", timeout=8)
+            if resp2.status_code == 200:
+                data2 = resp2.json()
+                items = data2.get("data", [])
+                if items:
+                    idx = int(items[0].get("value", -1))
+                    raw_label = str(items[0].get("value_classification", ""))
+                    # 英文 → 中文
+                    label_map = {
+                        "Extreme Fear": "极度恐慌",
+                        "Fear": "恐慌",
+                        "Neutral": "中性",
+                        "Greed": "贪婪",
+                        "Extreme Greed": "极度贪婪",
+                    }
+                    label = label_map.get(raw_label, raw_label)
+                    if idx >= 0:
+                        sentiment.fear_greed = idx
+                        sentiment.fear_greed_label = label + "(全球)"
+                        logger.debug(f"[alternative.me] 恐贪指数: {idx} ({label})")
+                        return
+        except Exception as e:
+            logger.debug(f"alternative.me 恐贪指数失败: {e}")
+
+        # --- 源3: 基于大盘技术面估算（兜底，始终可用）---
+        try:
+            # 用上证指数 RSI + 涨跌家数 简单估算
+            # 已知 sentiment.up_count / down_count
+            total = sentiment.up_count + sentiment.down_count
+            if total > 0:
+                up_ratio = sentiment.up_count / total  # 0~1
+                # 线性映射到 0-100：0%上涨=极度恐慌(0), 100%上涨=极度贪婪(100)
+                idx = round(up_ratio * 100)
+                if idx >= 60:
+                    label = "贪婪(估算)"
+                elif idx >= 45:
+                    label = "中性(估算)"
+                elif idx >= 30:
+                    label = "恐慌(估算)"
+                else:
+                    label = "极度恐慌(估算)"
+                sentiment.fear_greed = idx
+                sentiment.fear_greed_label = label
+                logger.debug(f"[估算] 恐贪指数: {idx} ({label})，涨家{sentiment.up_count}/跌家{sentiment.down_count}")
+        except Exception as e:
+            logger.debug(f"恐贪指数估算失败: {e}")
