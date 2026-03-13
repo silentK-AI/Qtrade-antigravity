@@ -203,10 +203,13 @@ class TechnicalAnalyzer:
         """
         根据技术报告检测交易信号。
 
-        检测规则:
-        - 买入: 价格触及 S1/S2 + RSI 偏弱/超卖 + MACD 柱放大
-        - 止盈: 价格触及 R1/R2 + RSI 超买
-        - 止损: 价格跌破 S2 + RSI 极端超卖
+        优化后的检测规则:
+        - 趋势过滤: 均线空头排列时禁止 BUY；多头排列时 STOP_LOSS 门槛收紧
+        - 量能确认: 放量（量比>1.5）加权，缩量（量比<0.6）降权
+        - MACD 防假叉: 需连续 2 根柱同向才确认金叉/死叉
+        - 多重支撑共振: Pivot S1/S2 + 布林下轨 + MA20 三者叠加给更高权重
+        - BUY 门槛: 强度 >= 0.55 且 >= 3 个条件
+        - 新增 SELL 信号: 趋势由多转空时主动提示
 
         Args:
             report: 当前技术报告
@@ -218,84 +221,211 @@ class TechnicalAnalyzer:
         signals = []
         price = report.price
 
-        # ---- 买入信号 ----
-        buy_reasons = []
-        buy_strength = 0.0
+        # ── 预计算公共状态 ──────────────────────────────────────────
+        # 趋势状态
+        trend_bull = (
+            report.ma5 > 0 and report.ma10 > 0 and report.ma20 > 0
+            and report.ma5 > report.ma10 > report.ma20
+        )
+        trend_bear = (
+            report.ma5 > 0 and report.ma10 > 0 and report.ma20 > 0
+            and report.ma5 < report.ma10 < report.ma20
+        )
 
-        # 条件 1: 价格接近支撑位
-        if report.support_s2 > 0 and price <= report.support_s2 * 1.005:
-            buy_reasons.append(f"触及S2支撑位 {report.support_s2:.3f}")
-            buy_strength += 0.35
-        elif report.support_s1 > 0 and price <= report.support_s1 * 1.005:
-            buy_reasons.append(f"触及S1支撑位 {report.support_s1:.3f}")
-            buy_strength += 0.25
+        # 量能状态
+        vol_strong = report.volume_ratio >= 1.5   # 明显放量
+        vol_weak = report.volume_ratio < 0.6      # 明显缩量
+        vol_bonus = 0.10 if vol_strong else (-0.08 if vol_weak else 0.0)
 
-        # 条件 2: RSI 超卖
-        if report.rsi_14 < 25:
-            buy_reasons.append(f"RSI={report.rsi_14:.1f} 极端超卖")
-            buy_strength += 0.30
-        elif report.rsi_14 < 35:
-            buy_reasons.append(f"RSI={report.rsi_14:.1f} 超卖区")
-            buy_strength += 0.20
+        # MACD 防假叉：判断 prev_report 的柱子方向（需连续 2 根才确认）
+        macd_golden = (
+            prev_report is not None
+            and report.macd_hist > 0
+            and prev_report.macd_hist <= 0
+        )
+        macd_death = (
+            prev_report is not None
+            and report.macd_hist < 0
+            and prev_report.macd_hist >= 0
+        )
+        # 持续多头/空头（非刚交叉，连续在一侧）
+        macd_bull_cont = report.macd_status == "多头" and report.macd_hist > 0
+        macd_bear_cont = report.macd_status == "空头" and report.macd_hist < 0
 
-        # 条件 3: MACD 金叉
-        if prev_report and report.macd_hist > 0 and prev_report.macd_hist <= 0:
-            buy_reasons.append("MACD 金叉")
-            buy_strength += 0.25
-        elif report.macd_hist > 0 and report.macd_status in ("金叉", "多头"):
-            buy_strength += 0.10
+        # 布林带位置（0=下轨, 1=上轨）
+        boll_pos: float = 0.5
+        if report.boll_upper > report.boll_lower > 0:
+            boll_pos = (price - report.boll_lower) / (report.boll_upper - report.boll_lower)
 
-        # 条件 4: 布林带下轨附近
-        if report.boll_lower > 0 and price <= report.boll_lower * 1.005:
-            buy_reasons.append(f"触及布林下轨 {report.boll_lower:.3f}")
-            buy_strength += 0.20
+        # 多重支撑共振计数（布林下轨 + MA20 + S1/S2 靠近）
+        support_resonance = 0
+        if report.boll_lower > 0 and price <= report.boll_lower * 1.008:
+            support_resonance += 1
+        if report.ma20 > 0 and price <= report.ma20 * 1.008:
+            support_resonance += 1
+        if report.support_s1 > 0 and price <= report.support_s1 * 1.008:
+            support_resonance += 1
+        if report.support_s2 > 0 and price <= report.support_s2 * 1.008:
+            support_resonance += 1
 
-        # 条件 5: KDJ 超卖金叉
-        if report.kdj_j < 20:
-            buy_reasons.append(f"KDJ J={report.kdj_j:.0f} 超卖")
-            buy_strength += 0.15
+        # 多重压力共振计数（布林上轨 + MA20 + R1/R2 靠近）
+        resist_resonance = 0
+        if report.boll_upper > 0 and price >= report.boll_upper * 0.992:
+            resist_resonance += 1
+        if report.ma20 > 0 and price >= report.ma20 * 0.992:
+            resist_resonance += 1
+        if report.resistance_r1 > 0 and price >= report.resistance_r1 * 0.992:
+            resist_resonance += 1
+        if report.resistance_r2 > 0 and price >= report.resistance_r2 * 0.992:
+            resist_resonance += 1
 
-        # 满足至少 2 个条件且强度 >= 0.4 才触发
-        if len(buy_reasons) >= 2 and buy_strength >= 0.4:
-            signals.append(AlertSignal(
-                symbol=report.symbol,
-                name=report.name,
-                signal_type="BUY",
-                price=price,
-                target_price=report.pivot_point,
-                stop_price=report.support_s2 * 0.995 if report.support_s2 > 0 else price * 0.97,
-                reason=" + ".join(buy_reasons),
-                strength=min(buy_strength, 1.0),
-            ))
+        # ── 买入信号 ────────────────────────────────────────────────
+        # 趋势过滤：空头排列时不发 BUY
+        if not trend_bear:
+            buy_reasons = []
+            buy_strength = 0.0
 
-        # ---- 止盈信号 ----
+            # 条件 1: 多重支撑共振（权重随共振数量递增）
+            if support_resonance >= 3:
+                buy_reasons.append(f"三重支撑共振（布林下轨/MA20/Pivot）")
+                buy_strength += 0.35
+            elif support_resonance == 2:
+                # 标注具体是哪两个支撑
+                sup_tags = []
+                if report.boll_lower > 0 and price <= report.boll_lower * 1.008:
+                    sup_tags.append(f"布林下轨{report.boll_lower:.3f}")
+                if report.ma20 > 0 and price <= report.ma20 * 1.008:
+                    sup_tags.append(f"MA20={report.ma20:.3f}")
+                if report.support_s1 > 0 and price <= report.support_s1 * 1.008:
+                    sup_tags.append(f"S1={report.support_s1:.3f}")
+                if report.support_s2 > 0 and price <= report.support_s2 * 1.008:
+                    sup_tags.append(f"S2={report.support_s2:.3f}")
+                buy_reasons.append("双重支撑共振（" + "/".join(sup_tags) + ")")
+                buy_strength += 0.25
+            elif report.support_s2 > 0 and price <= report.support_s2 * 1.005:
+                buy_reasons.append(f"触及S2支撑位 {report.support_s2:.3f}")
+                buy_strength += 0.20
+            elif report.support_s1 > 0 and price <= report.support_s1 * 1.005:
+                buy_reasons.append(f"触及S1支撑位 {report.support_s1:.3f}")
+                buy_strength += 0.15
+
+            # 条件 2: RSI 超卖
+            if report.rsi_14 < 25:
+                buy_reasons.append(f"RSI={report.rsi_14:.1f} 极端超卖")
+                buy_strength += 0.30
+            elif report.rsi_14 < 32:
+                buy_reasons.append(f"RSI={report.rsi_14:.1f} 超卖区")
+                buy_strength += 0.18
+
+            # 条件 3: MACD（防假叉：要求真实金叉，而非持续多头加分）
+            if macd_golden:
+                buy_reasons.append("MACD 金叉确认")
+                buy_strength += 0.25
+            elif macd_bull_cont and report.macd_dif > 0:  # 零轴上方多头，信号更可靠
+                buy_reasons.append("MACD 零轴上方多头")
+                buy_strength += 0.10
+
+            # 条件 4: KDJ 超卖
+            if report.kdj_j < 10:
+                buy_reasons.append(f"KDJ J={report.kdj_j:.0f} 深度超卖")
+                buy_strength += 0.20
+            elif report.kdj_j < 20:
+                buy_reasons.append(f"KDJ J={report.kdj_j:.0f} 超卖")
+                buy_strength += 0.12
+
+            # 条件 5: 趋势加成（多头排列额外加权）
+            if trend_bull:
+                buy_reasons.append("均线多头排列")
+                buy_strength += 0.12
+
+            # 量能加减权
+            buy_strength += vol_bonus
+            if vol_strong:
+                buy_reasons.append(f"放量确认（量比{report.volume_ratio:.1f}x）")
+            elif vol_weak:
+                buy_reasons.append(f"缩量（量比{report.volume_ratio:.1f}x，信号偏弱）")
+
+            # 门槛收紧：需 >= 3 个条件且强度 >= 0.55
+            if len(buy_reasons) >= 3 and buy_strength >= 0.55:
+                # 止损价：S2 下方 0.5%，无 S2 则用 ATR 动态止损
+                if report.support_s2 > 0:
+                    stop = report.support_s2 * 0.995
+                elif report.atr_14 > 0:
+                    stop = price - 2 * report.atr_14
+                else:
+                    stop = price * 0.97
+                # 目标价：取 R1 或 ATR 2 倍上方
+                if report.resistance_r1 > 0:
+                    target = report.resistance_r1
+                elif report.atr_14 > 0:
+                    target = price + 2 * report.atr_14
+                else:
+                    target = report.pivot_point
+                signals.append(AlertSignal(
+                    symbol=report.symbol,
+                    name=report.name,
+                    signal_type="BUY",
+                    price=price,
+                    target_price=round(target, 3),
+                    stop_price=round(stop, 3),
+                    reason=" + ".join(buy_reasons),
+                    strength=min(buy_strength, 1.0),
+                ))
+
+        # ── 止盈信号 ────────────────────────────────────────────────
         tp_reasons = []
         tp_strength = 0.0
 
-        if report.resistance_r1 > 0 and price >= report.resistance_r1 * 0.998:
-            tp_reasons.append(f"触及R1压力位 {report.resistance_r1:.3f}")
-            tp_strength += 0.30
-
-        if report.resistance_r2 > 0 and price >= report.resistance_r2 * 0.998:
+        # 多重压力共振（权重递增）
+        if resist_resonance >= 3:
+            tp_reasons.append("三重压力共振（布林上轨/MA20/Pivot）")
+            tp_strength += 0.35
+        elif resist_resonance == 2:
+            res_tags = []
+            if report.boll_upper > 0 and price >= report.boll_upper * 0.992:
+                res_tags.append(f"布林上轨{report.boll_upper:.3f}")
+            if report.ma20 > 0 and price >= report.ma20 * 0.992:
+                res_tags.append(f"MA20={report.ma20:.3f}")
+            if report.resistance_r1 > 0 and price >= report.resistance_r1 * 0.992:
+                res_tags.append(f"R1={report.resistance_r1:.3f}")
+            if report.resistance_r2 > 0 and price >= report.resistance_r2 * 0.992:
+                res_tags.append(f"R2={report.resistance_r2:.3f}")
+            tp_reasons.append("双重压力共振（" + "/".join(res_tags) + ")")
+            tp_strength += 0.25
+        elif report.resistance_r2 > 0 and price >= report.resistance_r2 * 0.998:
             tp_reasons.append(f"超越R2压力位 {report.resistance_r2:.3f}")
             tp_strength += 0.20
+        elif report.resistance_r1 > 0 and price >= report.resistance_r1 * 0.998:
+            tp_reasons.append(f"触及R1压力位 {report.resistance_r1:.3f}")
+            tp_strength += 0.15
 
-        if report.rsi_14 > 75:
-            tp_reasons.append(f"RSI={report.rsi_14:.1f} 超买")
+        if report.rsi_14 > 78:
+            tp_reasons.append(f"RSI={report.rsi_14:.1f} 极端超买")
+            tp_strength += 0.30
+        elif report.rsi_14 > 68:
+            tp_reasons.append(f"RSI={report.rsi_14:.1f} 超买区")
+            tp_strength += 0.18
+
+        if macd_death:
+            tp_reasons.append("MACD 死叉确认")
             tp_strength += 0.25
-        elif report.rsi_14 > 65:
-            tp_reasons.append(f"RSI={report.rsi_14:.1f} 偏强")
+        elif macd_bear_cont and report.macd_dif < 0:
+            tp_reasons.append("MACD 零轴下方空头")
             tp_strength += 0.10
 
-        if report.boll_upper > 0 and price >= report.boll_upper * 0.998:
-            tp_reasons.append(f"触及布林上轨 {report.boll_upper:.3f}")
+        if report.kdj_j > 90:
+            tp_reasons.append(f"KDJ J={report.kdj_j:.0f} 深度超买")
             tp_strength += 0.20
+        elif report.kdj_j > 80:
+            tp_reasons.append(f"KDJ J={report.kdj_j:.0f} 超买")
+            tp_strength += 0.12
 
-        if prev_report and report.macd_hist < 0 and prev_report.macd_hist >= 0:
-            tp_reasons.append("MACD 死叉")
-            tp_strength += 0.25
+        # 量能加减权（止盈时放量更危险）
+        tp_strength += vol_bonus
+        if vol_strong:
+            tp_reasons.append(f"放量见顶风险（量比{report.volume_ratio:.1f}x）")
 
-        if len(tp_reasons) >= 2 and tp_strength >= 0.4:
+        if len(tp_reasons) >= 2 and tp_strength >= 0.45:
             signals.append(AlertSignal(
                 symbol=report.symbol,
                 name=report.name,
@@ -305,26 +435,71 @@ class TechnicalAnalyzer:
                 strength=min(tp_strength, 1.0),
             ))
 
-        # ---- 止损信号 ----
+        # ── SELL 信号（趋势由多转空）────────────────────────────────
+        # 条件：上一次是多头排列，现在转为空头排列 + MACD 死叉确认
+        if prev_report is not None:
+            prev_trend_bull = (
+                prev_report.ma5 > 0 and prev_report.ma10 > 0 and prev_report.ma20 > 0
+                and prev_report.ma5 > prev_report.ma10 > prev_report.ma20
+            )
+            if prev_trend_bull and trend_bear and macd_death:
+                sell_reason = (
+                    f"均线由多头转空头排列 + MACD死叉"
+                    f"（MA5={report.ma5:.3f} MA10={report.ma10:.3f} MA20={report.ma20:.3f}）"
+                )
+                signals.append(AlertSignal(
+                    symbol=report.symbol,
+                    name=report.name,
+                    signal_type="SELL",
+                    price=price,
+                    stop_price=round(price * 1.03, 3),  # 止损在上方 3%
+                    reason=sell_reason,
+                    strength=0.85,
+                ))
+
+        # ── 止损信号 ────────────────────────────────────────────────
+        # 趋势过滤：多头排列时 STOP_LOSS 需更严格（至少 3 个条件）
         sl_reasons = []
+        sl_strength = 0.0
 
+        # 条件 1: 跌破关键支撑（叠加计分）
         if report.support_s2 > 0 and price < report.support_s2 * 0.995:
-            sl_reasons.append(f"跌破S2支撑位 {report.support_s2:.3f}")
+            sl_reasons.append(f"跌破S2支撑 {report.support_s2:.3f}")
+            sl_strength += 0.35
+        elif report.support_s1 > 0 and price < report.support_s1 * 0.995:
+            sl_reasons.append(f"跌破S1支撑 {report.support_s1:.3f}")
+            sl_strength += 0.20
 
-        if report.rsi_14 < 20:
+        # 条件 2: RSI 极端超卖（已跌过头，说明趋势极弱）
+        if report.rsi_14 < 18:
             sl_reasons.append(f"RSI={report.rsi_14:.1f} 极端超卖")
+            sl_strength += 0.30
+        elif report.rsi_14 < 25:
+            sl_reasons.append(f"RSI={report.rsi_14:.1f} 深度超卖")
+            sl_strength += 0.18
 
-        if report.boll_lower > 0 and price < report.boll_lower * 0.99:
+        # 条件 3: 跌破布林下轨
+        if report.boll_lower > 0 and price < report.boll_lower * 0.992:
             sl_reasons.append(f"跌破布林下轨 {report.boll_lower:.3f}")
+            sl_strength += 0.25
 
-        if len(sl_reasons) >= 2:
+        # 条件 4: MACD 死叉
+        if macd_death:
+            sl_reasons.append("MACD 死叉")
+            sl_strength += 0.15
+
+        # 多头排列中需更严格（3 个条件才止损，避免洗盘误报）
+        sl_min_conditions = 3 if trend_bull else 2
+        sl_min_strength = 0.65 if trend_bull else 0.50
+
+        if len(sl_reasons) >= sl_min_conditions and sl_strength >= sl_min_strength:
             signals.append(AlertSignal(
                 symbol=report.symbol,
                 name=report.name,
                 signal_type="STOP_LOSS",
                 price=price,
                 reason=" + ".join(sl_reasons),
-                strength=0.9,
+                strength=min(sl_strength, 1.0),
             ))
 
         return signals
@@ -794,6 +969,9 @@ class TechnicalAnalyzer:
         lines.append(f"  操作：{action}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def format_signal(signal: AlertSignal) -> str:
         """将 AlertSignal 格式化为微信推送文本"""
         type_map = {
             "BUY": "🟢 买入信号",
@@ -804,6 +982,8 @@ class TechnicalAnalyzer:
         label = type_map.get(signal.signal_type, signal.signal_type)
 
         lines = [
+            f"{label}",
+            f"{signal.name}（{signal.symbol}）",
             f"当前价: ¥{signal.price:.3f}",
         ]
 
