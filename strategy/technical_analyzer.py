@@ -73,12 +73,27 @@ class TechnicalReport:
     ma10: float = 0.0
     ma20: float = 0.0
     ma60: float = 0.0
+    ma120: float = 0.0
+    ma250: float = 0.0
     ma5_trend: str = "→"         # ↑/↓/→
     ma10_trend: str = "→"
     ma20_trend: str = "→"
 
     # 量价关系
     volume_ratio: float = 1.0     # 量比（当日/5日均量）
+
+    # 当日高低价
+    day_high: float = 0.0
+    day_low: float = 0.0
+
+    # 区间涨跌幅（从 K 线历史计算）
+    ret_10d: float = 0.0          # 近10日涨跌幅
+    ret_60d: float = 0.0          # 近60日（约3月）涨跌幅
+    ret_250d: float = 0.0         # 近250日（约1年）涨跌幅
+
+    # 主力资金净流入（亿元，正=净流入，负=净流出，0=无数据）
+    net_flow_main: float = 0.0
+    net_flow_valid: bool = False   # 是否有有效资金流数据
 
     # 综合评分 (-100 到 100, 正=偏多 负=偏空)
     score: float = 0.0
@@ -171,7 +186,12 @@ class TechnicalAnalyzer:
         self._calc_atr(report, high, low, close)
         self._calc_moving_averages(report, close)
         self._calc_volume_ratio(report, volume, current_volume)
+        self._calc_period_returns(report, close)
         self._calc_score(report)
+
+        # 当日高低价（从 K 线最后一条取）
+        report.day_high = round(float(high[-1]), 3)
+        report.day_low = round(float(low[-1]), 3)
 
         return report
 
@@ -484,8 +504,8 @@ class TechnicalAnalyzer:
                 report.volatility = "高"
 
     def _calc_moving_averages(self, report: TechnicalReport, close: np.ndarray):
-        """均线 MA5/MA10/MA20/MA60"""
-        for period, attr in [(5, "ma5"), (10, "ma10"), (20, "ma20"), (60, "ma60")]:
+        """均线 MA5/MA10/MA20/MA60/MA120/MA250"""
+        for period, attr in [(5, "ma5"), (10, "ma10"), (20, "ma20"), (60, "ma60"), (120, "ma120"), (250, "ma250")]:
             if len(close) >= period:
                 ma_val = np.mean(close[-period:])
                 setattr(report, attr, round(ma_val, 3))
@@ -501,6 +521,17 @@ class TechnicalAnalyzer:
                     setattr(report, attr, "↓")
                 else:
                     setattr(report, attr, "→")
+
+    def _calc_period_returns(self, report: TechnicalReport, close: np.ndarray):
+        """计算近 10/60/250 日区间涨跌幅"""
+        cur = close[-1] if len(close) > 0 else 0
+        if cur <= 0:
+            return
+        for n, attr in [(10, "ret_10d"), (60, "ret_60d"), (250, "ret_250d")]:
+            if len(close) > n:
+                base = close[-(n + 1)]
+                if base > 0:
+                    setattr(report, attr, round((cur - base) / base * 100, 2))
 
     def _calc_volume_ratio(self, report: TechnicalReport, volume: np.ndarray,
                            current_volume: float = 0):
@@ -599,41 +630,169 @@ class TechnicalAnalyzer:
 
     @staticmethod
     def format_report(report: TechnicalReport) -> str:
-        """将 TechnicalReport 格式化为微信推送的 Markdown 文本"""
-        change_icon = "🔴" if report.change_pct < 0 else "🟢" if report.change_pct > 0 else "⚪"
-        rsi_icon = "🔴" if report.rsi_status == "超买" else "🟢" if report.rsi_status in ("超卖", "偏弱") else "⚪"
+        """将 TechnicalReport 格式化为四节结构的盘前分析报告（Markdown）"""
+        now_str = report.timestamp.strftime("%Y年%-m月%-d日 %H:%M")
+        change_icon = "📉" if report.change_pct < 0 else "📈" if report.change_pct > 0 else "➡️"
+
+        # ── 综合结论导语 ──
+        score = report.score
+        if score > 40:
+            conclusion = "短期技术偏强，多头格局延续，可积极关注。"
+        elif score > 15:
+            conclusion = "中期趋势向好，短期有所分歧，建议观望择机介入。"
+        elif score > -15:
+            conclusion = "技术指标中性，多空均衡，短期方向不明，宜观望为主。"
+        elif score > -40:
+            conclusion = "短期技术走弱，建议谨慎，等待企稳信号后再考虑介入。"
+        else:
+            conclusion = "技术指标全面走弱，空头占优，建议回避或减仓观望。"
 
         lines = [
-            f"**【{report.symbol} {report.name}】** {change_icon} ¥{report.price:.3f} ({report.change_pct:+.2f}%)",
-            f"━━━━━━━━━━━━━━━━━",
-            f"📌 **支撑/压力位**",
-            f"  压力: R2={report.resistance_r2:.3f}  R1={report.resistance_r1:.3f}",
-            f"  轴心: PP={report.pivot_point:.3f}",
-            f"  支撑: S1={report.support_s1:.3f}  S2={report.support_s2:.3f}",
+            f"**{report.name}（{report.symbol}）** — 截至 {now_str}",
+            f"{conclusion}",
             f"",
-            f"📊 **核心指标**",
-            f"  {rsi_icon} RSI(14): {report.rsi_14:.1f} ({report.rsi_status})",
-            f"  MACD: DIF={report.macd_dif:.4f} DEA={report.macd_dea:.4f} 柱={report.macd_hist:.4f} ({report.macd_status})",
-            f"  KDJ: K={report.kdj_k:.0f} D={report.kdj_d:.0f} J={report.kdj_j:.0f} ({report.kdj_status})",
-            f"",
-            f"📈 **布林带**",
-            f"  上轨={report.boll_upper:.3f}  中轨={report.boll_middle:.3f}  下轨={report.boll_lower:.3f}",
-            f"  带宽: {report.boll_width:.1f}%",
-            f"",
-            f"📏 **均线**",
-            f"  5日={report.ma5:.3f}{report.ma5_trend}  10日={report.ma10:.3f}{report.ma10_trend}  20日={report.ma20:.3f}{report.ma20_trend}",
-            f"  60日={report.ma60:.3f}",
-            f"",
-            f"⚡ **波动/量价**",
-            f"  ATR(14): {report.atr_14:.4f} ({report.volatility})",
-            f"  量比: {report.volume_ratio:.2f}",
-            f"",
-            f"🎯 **综合评分: {report.score:+.0f} ({report.score_label})**",
         ]
-        return "\n".join(lines)
 
-    @staticmethod
-    def format_signal(signal: AlertSignal) -> str:
+        # ── 一、核心行情 ──
+        lines.append(f"**一、核心行情**")
+        chg_str = f"{report.change_pct:+.2f}%"
+        lines.append(f"股价：{report.price:.3f} 元，当日 **{chg_str}** {change_icon}")
+        if report.day_high > 0 and report.day_low > 0:
+            lines.append(f"当日最高 {report.day_high:.3f} 元 / 最低 {report.day_low:.3f} 元")
+
+        # 区间涨跌
+        ret_parts = []
+        if report.ret_10d != 0:
+            ret_parts.append(f"近10日 {report.ret_10d:+.1f}%")
+        if report.ret_60d != 0:
+            ret_parts.append(f"近3月 {report.ret_60d:+.1f}%")
+        if report.ret_250d != 0:
+            ret_parts.append(f"近1年 {report.ret_250d:+.1f}%")
+        if ret_parts:
+            lines.append("区间涨跌：" + " | ".join(ret_parts))
+
+        # 主力资金
+        if report.net_flow_valid:
+            flow_icon = "📥" if report.net_flow_main > 0 else "📤"
+            flow_word = "净流入" if report.net_flow_main > 0 else "净流出"
+            lines.append(f"主力资金：{flow_icon} {flow_word} {abs(report.net_flow_main):.2f} 亿元")
+
+        lines.append("")
+
+        # ── 二、关键技术指标 ──
+        lines.append(f"**二、关键技术指标（日线）**")
+
+        # 1. 趋势与均线
+        lines.append(f"**1. 趋势与均线**")
+        ma_parts = []
+        if report.ma5 > 0:   ma_parts.append(f"MA5={report.ma5:.3f}{report.ma5_trend}")
+        if report.ma10 > 0:  ma_parts.append(f"MA10={report.ma10:.3f}{report.ma10_trend}")
+        if report.ma20 > 0:  ma_parts.append(f"MA20={report.ma20:.3f}{report.ma20_trend}")
+        if report.ma60 > 0:  ma_parts.append(f"MA60={report.ma60:.3f}")
+        if report.ma120 > 0: ma_parts.append(f"MA120={report.ma120:.3f}")
+        if report.ma250 > 0: ma_parts.append(f"MA250={report.ma250:.3f}")
+        if ma_parts:
+            lines.append("  " + "  ".join(ma_parts))
+
+        # 均线多空排列判断
+        if report.ma5 > 0 and report.ma10 > 0 and report.ma20 > 0:
+            if report.ma5 > report.ma10 > report.ma20:
+                lines.append("  多头排列（MA5>MA10>MA20），中期上升趋势延续")
+            elif report.ma5 < report.ma10 < report.ma20:
+                lines.append("  空头排列（MA5<MA10<MA20），中期下降趋势")
+            else:
+                lines.append("  均线交织，趋势不明朗，震荡格局")
+
+        # 与关键均线对比
+        if report.ma5 > 0:
+            rel5 = (report.price - report.ma5) / report.ma5 * 100
+            pos5 = "上方" if rel5 > 0 else "下方"
+            lines.append(f"  价格在5日线{pos5} {abs(rel5):.1f}%（MA5={report.ma5:.3f}）")
+        if report.ma10 > 0:
+            rel10 = (report.price - report.ma10) / report.ma10 * 100
+            pos10 = "上方" if rel10 > 0 else "下方"
+            lines.append(f"  价格在10日线{pos10} {abs(rel10):.1f}%（MA10={report.ma10:.3f}）")
+
+        lines.append("")
+
+        # 2. 震荡与超买（RSI / 布林带）
+        lines.append("**2. 震荡与超买（RSI / 布林带）**")
+        rsi_desc = {
+            "超买": "处于超买区，短期回调压力大",
+            "偏强": "偏强，仍在多头区间",
+            "中性": "中性区间，多空均衡",
+            "偏弱": "偏弱，关注能否企稳",
+            "超卖": "超卖区，存在超跌反弹机会",
+        }.get(report.rsi_status, "")
+        lines.append(f"  RSI（14日）：{report.rsi_14:.1f} — {rsi_desc}")
+        if report.boll_upper > 0:
+            boll_pos = (report.price - report.boll_lower) / (report.boll_upper - report.boll_lower) * 100 if (report.boll_upper - report.boll_lower) > 0 else 50
+            if boll_pos >= 80:
+                boll_desc = "接近上轨，注意超买风险"
+            elif boll_pos <= 20:
+                boll_desc = "接近下轨，关注超跌支撑"
+            else:
+                boll_desc = f"处于带内中性区域（位置 {boll_pos:.0f}%）"
+            lines.append(f"  布林带：上轨 {report.boll_upper:.3f} / 中轨 {report.boll_middle:.3f} / 下轨 {report.boll_lower:.3f}，{boll_desc}")
+            lines.append(f"  带宽 {report.boll_width:.1f}%（{'震荡加剧' if report.boll_width > 8 else '相对收窄'}）")
+
+        lines.append("")
+
+        # 3. 动能与背离（MACD / 量能）
+        lines.append("**3. 动能（MACD / 量能）**")
+        macd_desc = {
+            "金叉": "MACD 金叉，上涨动能启动",
+            "多头": "MACD 多头区间，红柱持续",
+            "死叉": "MACD 死叉，下跌动能释放",
+            "空头": "MACD 空头区间，注意风险",
+            "中性": "MACD 零轴附近，方向待定",
+        }.get(report.macd_status, "")
+        lines.append(f"  MACD：DIF={report.macd_dif:.4f} DEA={report.macd_dea:.4f} 柱={report.macd_hist:.4f}")
+        lines.append(f"  {macd_desc}")
+        vr = report.volume_ratio
+        if vr > 2.0:
+            vr_desc = f"量比 {vr:.2f}，明显放量，多空分歧加大"
+        elif vr > 1.2:
+            vr_desc = f"量比 {vr:.2f}，温和放量，关注方向确认"
+        elif vr < 0.6:
+            vr_desc = f"量比 {vr:.2f}，明显缩量，观望情绪浓"
+        else:
+            vr_desc = f"量比 {vr:.2f}，成交平稳"
+        lines.append(f"  {vr_desc}")
+
+        lines.append("")
+
+        # 4. 支撑与压力
+        lines.append("**4. 支撑与压力（关键价位）**")
+        if report.support_s1 > 0 or report.support_s2 > 0:
+            sup_parts = []
+            if report.support_s1 > 0: sup_parts.append(f"S1={report.support_s1:.3f}")
+            if report.support_s2 > 0: sup_parts.append(f"S2={report.support_s2:.3f}")
+            lines.append("  短期支撑：" + " → ".join(sup_parts))
+        if report.resistance_r1 > 0 or report.resistance_r2 > 0:
+            res_parts = []
+            if report.resistance_r1 > 0: res_parts.append(f"R1={report.resistance_r1:.3f}")
+            if report.resistance_r2 > 0: res_parts.append(f"R2={report.resistance_r2:.3f}")
+            lines.append("  短期压力：" + " → ".join(res_parts))
+        lines.append(f"  ATR（14日）：{report.atr_14:.4f}，波动性 {report.volatility}")
+
+        lines.append("")
+
+        # ── 三、是否适合买入（结论）──
+        lines.append("**三、综合评估与操作建议**")
+        score_label_map = {
+            "强势看多": ("当前技术面偏强，可考虑轻仓介入或持仓", "空仓可在支撑位分批建仓；持仓可持有，跌破S2止损"),
+            "偏多":    ("技术面偏多，但需确认量能配合", "等待缩量回踩均线支撑后介入；持仓继续持有"),
+            "中性":    ("技术面中性，不急于操作", "观望为主，等待方向明朗再决策"),
+            "偏空":    ("短期走弱，不建议追买", "空仓继续观望；持仓设好止损（S2下方）"),
+            "强势看空": ("技术全面走弱，建议回避", "空仓不介入；持仓优先止损减仓"),
+        }
+        conclusion_detail, action = score_label_map.get(report.score_label, (conclusion, "观望为主"))
+        lines.append(f"  综合评分：{report.score:+.0f}（{report.score_label}）")
+        lines.append(f"  结论：{conclusion_detail}")
+        lines.append(f"  操作：{action}")
+
+        return "\n".join(lines)
         """将 AlertSignal 格式化为微信推送文本"""
         type_map = {
             "BUY": "🟢 买入信号",

@@ -153,6 +153,12 @@ class StockAlertMonitor:
             )
 
             if report:
+                # 注入实时行情的当日高低价（盘中数据比K线末行更准确）
+                if quote and quote.is_valid:
+                    if quote.high > 0:
+                        report.day_high = round(quote.high, 3)
+                    if quote.low > 0:
+                        report.day_low = round(quote.low, 3)
                 reports.append(report)
                 self._prev_reports[symbol] = report
 
