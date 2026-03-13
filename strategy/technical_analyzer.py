@@ -631,7 +631,8 @@ class TechnicalAnalyzer:
     @staticmethod
     def format_report(report: TechnicalReport) -> str:
         """将 TechnicalReport 格式化为四节结构的盘前分析报告（Markdown）"""
-        now_str = report.timestamp.strftime("%Y年%-m月%-d日 %H:%M")
+        _ts = report.timestamp
+        now_str = f"{_ts.year}年{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
         change_icon = "📉" if report.change_pct < 0 else "📈" if report.change_pct > 0 else "➡️"
 
         # ── 综合结论导语 ──

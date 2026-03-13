@@ -674,13 +674,25 @@ class StockDataService:
                 import requests as _req2
                 proxy_sess = _req2.Session()
                 proxy_sess.trust_env = True  # 使用系统代理
-                proxy_sess.headers["User-Agent"] = "Mozilla/5.0"
+                proxy_sess.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json",
+                    "Referer": "https://finance.yahoo.com",
+                })
                 for ycode, (price_attr, chg_attr) in yahoo_map.items():
                     if got.get(price_attr):
                         continue
                     try:
+                        # 先访问主页获取 cookie
+                        try:
+                            proxy_sess.get("https://finance.yahoo.com", timeout=5)
+                        except Exception:
+                            pass
                         yurl = f"https://query1.finance.yahoo.com/v8/finance/chart/{ycode}?interval=1d&range=5d"
                         yr = proxy_sess.get(yurl, timeout=10)
+                        if yr.status_code != 200 or not yr.text.strip():
+                            logger.debug(f"Yahoo {ycode} 返回空: status={yr.status_code}")
+                            continue
                         yd = yr.json()
                         result = yd["chart"]["result"][0]
                         closes = result["indicators"]["quote"][0]["close"]
@@ -699,14 +711,22 @@ class StockDataService:
             except Exception as e:
                 logger.debug(f"Yahoo VIX 整体失败: {e}")
 
-        # --- 源3: akshare（仅 VIX，备用）---
+        # --- 源3: akshare（仅 VIX，备用，尝试多个可能的接口名）---
         if not got.get("vix"):
             try:
                 import akshare as ak
-                df_vix = ak.index_vix_weeklyfutures()
+                df_vix = None
+                for func_name in ["index_vix_weeklyfutures", "futures_vix_baidu", "index_option_50etf_qvix"]:
+                    try:
+                        fn = getattr(ak, func_name, None)
+                        if fn:
+                            df_vix = fn()
+                            break
+                    except Exception:
+                        continue
                 if df_vix is not None and not df_vix.empty:
                     last = df_vix.iloc[-1]
-                    price_col = [c for c in df_vix.columns if "收盘" in c or "close" in c.lower()]
+                    price_col = [c for c in df_vix.columns if "收盘" in c or "close" in c.lower() or "vix" in c.lower()]
                     if price_col:
                         price = float(last[price_col[0]])
                         if price > 0:
