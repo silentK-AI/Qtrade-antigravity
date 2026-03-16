@@ -310,7 +310,7 @@ class StockPricePredictor:
                 )
 
             self._models[symbol] = (range_model, dir_model, r2, len(X), mae_pct)
-            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} MAE={mae_pct:.3f}%")
+            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f} MAE={mae_pct:.3f}%")
             return True
 
         except Exception as e:
@@ -364,7 +364,7 @@ class StockPricePredictor:
                 pred_high=pred_high,
                 pred_low=pred_low,
                 pred_range_pct=round(pred_range, 2),
-                confidence=round(mae_pct, 3),  # 用 MAE% 作为误差指标
+                confidence=round(r2, 3),  # R² 置信度
                 last_close=last_close,
                 model_samples=n_samples,
             )

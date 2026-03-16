@@ -298,12 +298,11 @@ class StockAlertMonitor:
         pred_lines = []
         for report in sorted(reports, key=lambda r: r.score, reverse=True):
             if report.pred_high > 0 and report.pred_low > 0:
-                # confidence 现在存的是 MAE%（越小越准）
-                mae = report.pred_confidence
+                r2_pct = int(report.pred_confidence * 100)
                 pred_lines.append(
                     f"  **{report.name}**({report.symbol}): "
                     f"高 `{report.pred_high:.3f}` / 低 `{report.pred_low:.3f}` "
-                    f"波动 {report.pred_range_pct:.1f}% 误差 ±{mae:.2f}%"
+                    f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
                 )
 
         if pred_lines:
