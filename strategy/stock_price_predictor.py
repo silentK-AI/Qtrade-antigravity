@@ -22,6 +22,10 @@
 from __future__ import annotations
 
 import os
+# 避免 OMP 共享内存权限问题（Cursor 沙盒/某些 Linux 环境）
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -63,7 +67,7 @@ class StockPricePredictor:
     """
 
     # 特征维度
-    N_FEATURES = 28
+    N_FEATURES = 24
 
     def __init__(self, model_dir: str = "models/stock"):
         self._model_dir = Path(model_dir)
