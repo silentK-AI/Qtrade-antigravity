@@ -623,10 +623,37 @@ class StockDataService:
     def _fetch_vix_indices(self, sentiment: MarketSentiment):
         """
         获取 VIX / VXN / OVX 恐慌指数。
-        数据源:
-          1. 新浪行情 fx_VIX/fx_VXN/fx_OVX（直连，服务端/本地均可）
-          2. akshare（仅 VIX 备用）
+        数据源: CBOE 官方 CSV（任意时段可用，国内直连）
         """
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+        cboe_map = {
+            "VIX": ("https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv",  "vix",  "vix_change_pct",  4),
+            "VXN": ("https://cdn.cboe.com/api/global/us_indices/daily_prices/VXN_History.csv",  "vxn",  "vxn_change_pct",  4),
+            "OVX": ("https://cdn.cboe.com/api/global/us_indices/daily_prices/OVX_History.csv",  "ovx",  "ovx_change_pct",  1),
+        }
+        for name, (url, price_attr, chg_attr, close_idx) in cboe_map.items():
+            try:
+                r = self._http.get(url, timeout=15, headers={"User-Agent": ua})
+                if r.status_code != 200:
+                    logger.debug(f"[CBOE] {name} status={r.status_code}")
+                    continue
+                lines = r.text.strip().split("\n")
+                # 取最后两行计算涨跌幅
+                if len(lines) < 2:
+                    continue
+                def parse_close(line, idx):
+                    parts = line.strip().split(",")
+                    return float(parts[idx]) if len(parts) > idx else 0.0
+                last_close = parse_close(lines[-1], close_idx)
+                prev_close = parse_close(lines[-2], close_idx) if len(lines) >= 3 else 0.0
+                if last_close <= 0:
+                    continue
+                chg_pct = (last_close - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
+                setattr(sentiment, price_attr, round(last_close, 2))
+                setattr(sentiment, chg_attr, round(chg_pct, 2))
+                logger.debug(f"[CBOE] {name}: {last_close:.2f} ({chg_pct:+.2f}%)")
+            except Exception as e:
+                logger.debug(f"[CBOE] {name} 失败: {e}")
         import re
         got = {"vix": False, "vxn": False, "ovx": False}
 
