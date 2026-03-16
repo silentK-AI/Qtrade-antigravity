@@ -214,7 +214,15 @@ class StockAlertMonitor:
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         sections = [f"# 📊 盘前技术分析报告\n> {date_str}\n"]
 
-        # ── 恐慌 / 情绪指数区块（置于报告最前）──
+        def is_etf(symbol: str) -> bool:
+            return symbol.startswith(("1", "5"))
+
+        # 股票在前，ETF 在后；同类按评分降序
+        stocks  = sorted([r for r in reports if not is_etf(r.symbol)], key=lambda r: r.score, reverse=True)
+        etfs    = sorted([r for r in reports if     is_etf(r.symbol)], key=lambda r: r.score, reverse=True)
+        ordered = stocks + etfs
+
+        # ── 一、恐慌 / 情绪指数 ──
         fear_lines = []
 
         # VIX
@@ -256,7 +264,7 @@ class StockAlertMonitor:
         else:
             fear_lines.append("  原油 OVX: 暂无数据")
 
-        # 韭圈儿恐贪指数
+        # 恐贪指数
         if sentiment.fear_greed >= 0:
             fg = sentiment.fear_greed
             if fg >= 80:
@@ -288,32 +296,40 @@ class StockAlertMonitor:
             env_parts.append(f"北向 {flow_icon}{sentiment.north_flow:.1f}亿")
         if sentiment.up_count > 0 or sentiment.down_count > 0:
             env_parts.append(f"涨{sentiment.up_count}/跌{sentiment.down_count}")
-
         if env_parts:
             sections.append(f"🌏 **市场环境**: {' | '.join(env_parts)}\n")
 
         sections.append("---\n")
 
-        # ── XGBoost 次日价格预测汇总 ──
-        pred_lines = []
-        for report in sorted(reports, key=lambda r: r.score, reverse=True):
+        # ── 二、XGBoost 次日价格预测汇总（股票在前，ETF 在后）──
+        pred_lines_stock = []
+        pred_lines_etf   = []
+        for report in ordered:
             if report.pred_high > 0 and report.pred_low > 0:
                 r2_pct = int(report.pred_confidence * 100)
-                pred_lines.append(
+                line = (
                     f"  **{report.name}**({report.symbol}): "
                     f"高 `{report.pred_high:.3f}` / 低 `{report.pred_low:.3f}` "
                     f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
                 )
+                if is_etf(report.symbol):
+                    pred_lines_etf.append(line)
+                else:
+                    pred_lines_stock.append(line)
 
-        if pred_lines:
+        all_pred = pred_lines_stock + pred_lines_etf
+        if all_pred:
             sections.append("### 🤖 XGBoost 次日价格预测")
-            sections.append("\n".join(pred_lines))
+            if pred_lines_stock:
+                sections.append("**📈 股票**")
+                sections.append("\n".join(pred_lines_stock))
+            if pred_lines_etf:
+                sections.append("**🗂 ETF**")
+                sections.append("\n".join(pred_lines_etf))
             sections.append("\n---\n")
 
-        # 按评分排序（从高到低）
-        reports.sort(key=lambda r: r.score, reverse=True)
-
-        for report in reports:
+        # ── 三、各标的详细分析（股票在前，ETF 在后）──
+        for report in ordered:
             sections.append(TechnicalAnalyzer.format_report(report))
             sections.append("\n---\n")
 
