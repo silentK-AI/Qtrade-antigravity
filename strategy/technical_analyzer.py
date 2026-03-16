@@ -834,8 +834,19 @@ class TechnicalAnalyzer:
         lines = [
             f"**{report.name}（{report.symbol}）** — 截至 {now_str}",
             f"{conclusion}",
-            f"",
         ]
+
+        # ── XGBoost 次日价格预测（置于标题下方）──
+        if report.pred_high > 0 and report.pred_low > 0 and report.price > 0:
+            mid = (report.pred_high + report.pred_low) / 2
+            pred_dir_pct = (mid - report.price) / report.price * 100
+            if pred_dir_pct > 0:
+                pred_color = f"**🔴 预测明日偏多 +{pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
+            else:
+                pred_color = f"**🟢 预测明日偏空 {pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
+            lines.append(pred_color)
+
+        lines.append("")
 
         # ── 一、核心行情 ──
         lines.append(f"**一、核心行情**")

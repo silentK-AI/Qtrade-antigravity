@@ -322,10 +322,10 @@ class StockAlertMonitor:
             sections.append("### 🤖 XGBoost 次日价格预测")
             if pred_lines_stock:
                 sections.append("**📈 股票**")
-                sections.append("\n".join(pred_lines_stock))
+                sections.append("\n\n".join(pred_lines_stock))
             if pred_lines_etf:
                 sections.append("**🗂 ETF**")
-                sections.append("\n".join(pred_lines_etf))
+                sections.append("\n\n".join(pred_lines_etf))
             sections.append("\n---\n")
 
         # ── 三、各标的详细分析（股票在前，ETF 在后）──
