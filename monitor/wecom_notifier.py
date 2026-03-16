@@ -30,6 +30,13 @@ class WeCOMNotifier:
         self.access_token = None
         self.token_expire_time = 0
         self.base_url = "https://qyapi.weixin.qq.com/cgi-bin"
+        
+        # 创建走系统代理的 session
+        self.session = requests.Session()
+        self.session.trust_env = True
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
 
     def _get_access_token(self) -> str:
         """获取 access_token（7200秒有效期，自动缓存）"""
@@ -44,7 +51,7 @@ class WeCOMNotifier:
                 "corpid": self.corp_id,
                 "corpsecret": self.secret,
             }
-            resp = requests.get(url, params=params, timeout=10)
+            resp = self.session.get(url, params=params, timeout=10)
             data = resp.json()
             if data.get("errcode") == 0:
                 self.access_token = data["access_token"]
@@ -90,7 +97,7 @@ class WeCOMNotifier:
                 "safe": 0,
             }
 
-            resp = requests.post(url, params=params, json=payload, timeout=10)
+            resp = self.session.post(url, params=params, json=payload, timeout=10)
             data = resp.json()
             if data.get("errcode") == 0:
                 logger.debug(f"[企业微信] 文本消息发送成功: {data.get('msgid')}")
@@ -133,7 +140,7 @@ class WeCOMNotifier:
                 },
             }
 
-            resp = requests.post(url, params=params, json=payload, timeout=10)
+            resp = self.session.post(url, params=params, json=payload, timeout=10)
             data = resp.json()
             if data.get("errcode") == 0:
                 logger.debug(f"[企业微信] Markdown 消息发送成功: {data.get('msgid')}")
@@ -182,7 +189,7 @@ class WeCOMNotifier:
                 },
             }
 
-            resp = requests.post(url_api, params=params, json=payload, timeout=10)
+            resp = self.session.post(url_api, params=params, json=payload, timeout=10)
             data = resp.json()
             if data.get("errcode") == 0:
                 logger.debug(f"[企业微信] 卡片消息发送成功: {data.get('msgid')}")
