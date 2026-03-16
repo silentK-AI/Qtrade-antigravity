@@ -99,6 +99,14 @@ class TechnicalReport:
     score: float = 0.0
     score_label: str = "中性"
 
+    # XGBoost 次日价格预测
+    pred_high: float = 0.0        # 预测次日最高价
+    pred_low: float = 0.0         # 预测次日最低价
+    pred_range_pct: float = 0.0   # 预测波动率 (%)
+    pred_confidence: float = 0.0  # 模型置信度 (R²)
+    pred_hit_high: bool = False   # 盘中是否已触及预测最高价
+    pred_hit_low: bool = False    # 盘中是否已触及预测最低价
+
     timestamp: datetime = field(default_factory=datetime.now)
 
 

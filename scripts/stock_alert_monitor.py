@@ -44,6 +44,7 @@ from config.stock_settings import (
 )
 from data.stock_data_service import StockDataService, MarketSentiment
 from strategy.technical_analyzer import TechnicalAnalyzer, TechnicalReport, AlertSignal
+from strategy.stock_price_predictor import StockPricePredictor, StockPricePrediction
 from monitor.notifier import Notifier
 
 
@@ -58,6 +59,7 @@ class StockAlertMonitor:
         self._data_service = StockDataService()
         self._analyzer = TechnicalAnalyzer()
         self._notifier = Notifier()
+        self._predictor = StockPricePredictor(model_dir="models/stock")
 
         # 历史 K 线缓存: {symbol: DataFrame}
         self._klines_cache: dict = {}
@@ -65,6 +67,10 @@ class StockAlertMonitor:
         self._prev_reports: dict[str, TechnicalReport] = {}
         # 信号冷却: {symbol_signaltype: (timestamp, reason)}
         self._signal_cooldown: dict[str, tuple[float, str]] = {}
+        # 次日价格预测缓存: {symbol: StockPricePrediction}
+        self._predictions: dict[str, StockPricePrediction] = {}
+        # 预测触价推送记录: {symbol_high/low: bool}
+        self._pred_hit_notified: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     #  主流程
@@ -130,6 +136,26 @@ class StockAlertMonitor:
         # 获取市场情绪
         sentiment = self._data_service.fetch_market_sentiment()
 
+        # ── XGBoost 次日价格预测（训练 + 预测，一次性完成）──
+        logger.info("=== XGBoost 次日价格预测 ===")
+        self._predictions.clear()
+        self._pred_hit_notified.clear()
+        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+            klines = self._klines_cache.get(symbol)
+            if klines is None:
+                continue
+            try:
+                pred = self._predictor.train_and_predict(symbol, cfg["name"], klines)
+                if pred:
+                    self._predictions[symbol] = pred
+                    logger.info(
+                        f"  [{symbol} {cfg['name']}] 预测高={pred.pred_high:.3f} "
+                        f"低={pred.pred_low:.3f} 波动={pred.pred_range_pct:.2f}% "
+                        f"置信={pred.confidence:.2f}"
+                    )
+            except Exception as e:
+                logger.warning(f"  [{symbol}] 预测失败: {e}")
+
         # 生成每个标的的技术报告
         reports = []
         for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
@@ -159,6 +185,13 @@ class StockAlertMonitor:
                         report.day_high = round(quote.high, 3)
                     if quote.low > 0:
                         report.day_low = round(quote.low, 3)
+                # 注入 XGBoost 预测结果
+                pred = self._predictions.get(symbol)
+                if pred:
+                    report.pred_high = pred.pred_high
+                    report.pred_low = pred.pred_low
+                    report.pred_range_pct = pred.pred_range_pct
+                    report.pred_confidence = pred.confidence
                 reports.append(report)
                 self._prev_reports[symbol] = report
 
@@ -261,6 +294,22 @@ class StockAlertMonitor:
 
         sections.append("---\n")
 
+        # ── XGBoost 次日价格预测汇总 ──
+        pred_lines = []
+        for report in sorted(reports, key=lambda r: r.score, reverse=True):
+            if report.pred_high > 0 and report.pred_low > 0:
+                conf_bar = "★" * round(report.pred_confidence * 5) + "☆" * (5 - round(report.pred_confidence * 5))
+                pred_lines.append(
+                    f"  **{report.name}**({report.symbol}): "
+                    f"高 `{report.pred_high:.3f}` / 低 `{report.pred_low:.3f}` "
+                    f"波动 {report.pred_range_pct:.1f}% 置信 {conf_bar}"
+                )
+
+        if pred_lines:
+            sections.append("### 🤖 XGBoost 次日价格预测")
+            sections.append("\n".join(pred_lines))
+            sections.append("\n---\n")
+
         # 按评分排序（从高到低）
         reports.sort(key=lambda r: r.score, reverse=True)
 
@@ -345,6 +394,40 @@ class StockAlertMonitor:
 
             if not report:
                 continue
+
+            # 检测是否触及 XGBoost 预测价格
+            pred = self._predictions.get(symbol)
+            if pred and pred.pred_high > 0 and pred.pred_low > 0:
+                price = quote.price
+                # 触及预测最高价（价格 >= 预测高价的 99.5%）
+                hit_high_key = f"{symbol}_pred_high"
+                if price >= pred.pred_high * 0.995 and not self._pred_hit_notified.get(hit_high_key):
+                    self._pred_hit_notified[hit_high_key] = True
+                    self._notifier.send(
+                        f"🎯 触及预测高价 {cfg.get('name')}({symbol})",
+                        f"**{cfg.get('name')}**({symbol}) 触及 XGBoost 预测最高价\n"
+                        f"- 当前价: **{price:.3f}**\n"
+                        f"- 预测高价: {pred.pred_high:.3f}\n"
+                        f"- 预测低价: {pred.pred_low:.3f}\n"
+                        f"- 预测波动率: {pred.pred_range_pct:.1f}%\n"
+                        f"> 提示: 可考虑减仓或止盈"
+                    )
+                    logger.info(f"[{symbol}] 🎯 触及预测高价 {pred.pred_high:.3f}")
+
+                # 触及预测最低价（价格 <= 预测低价的 100.5%）
+                hit_low_key = f"{symbol}_pred_low"
+                if price <= pred.pred_low * 1.005 and not self._pred_hit_notified.get(hit_low_key):
+                    self._pred_hit_notified[hit_low_key] = True
+                    self._notifier.send(
+                        f"🎯 触及预测低价 {cfg.get('name')}({symbol})",
+                        f"**{cfg.get('name')}**({symbol}) 触及 XGBoost 预测最低价\n"
+                        f"- 当前价: **{price:.3f}**\n"
+                        f"- 预测低价: {pred.pred_low:.3f}\n"
+                        f"- 预测高价: {pred.pred_high:.3f}\n"
+                        f"- 预测波动率: {pred.pred_range_pct:.1f}%\n"
+                        f"> 提示: 可考虑加仓或建仓"
+                    )
+                    logger.info(f"[{symbol}] 🎯 触及预测低价 {pred.pred_low:.3f}")
 
             # 检测信号
             prev_report = self._prev_reports.get(symbol)
