@@ -51,16 +51,28 @@ class WeCOMNotifier:
                 "corpid": self.corp_id,
                 "corpsecret": self.secret,
             }
-            resp = self.session.get(url, params=params, timeout=10)
-            data = resp.json()
-            if data.get("errcode") == 0:
-                self.access_token = data["access_token"]
-                self.token_expire_time = now + 7000  # 提前10秒过期
-                logger.debug(f"[企业微信] 获取 access_token 成功")
-                return self.access_token
-            else:
-                logger.error(f"[企业微信] 获取 token 失败: {data.get('errmsg')}")
-                return None
+            # 尝试多次，处理网络波动
+            for attempt in range(2):
+                try:
+                    resp = self.session.get(url, params=params, timeout=10)
+                    data = resp.json()
+                    if data.get("errcode") == 0:
+                        self.access_token = data["access_token"]
+                        self.token_expire_time = now + 7000  # 提前10秒过期
+                        logger.debug(f"[企业微信] 获取 access_token 成功")
+                        return self.access_token
+                    else:
+                        logger.error(f"[企业微信] 获取 token 失败: {data.get('errmsg')}")
+                        return None
+                except Exception as e:
+                    if attempt == 0:
+                        logger.debug(f"[企业微信] 第 1 次尝试失败: {e}，准备重试...")
+                        import time as _time
+                        _time.sleep(1)
+                        continue
+                    else:
+                        logger.error(f"[企业微信] 获取 token 异常（已重试）: {e}")
+                        return None
         except Exception as e:
             logger.error(f"[企业微信] 获取 token 异常: {e}")
             return None

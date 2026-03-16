@@ -140,9 +140,14 @@ class Notifier:
                 if success:
                     logger.debug(f"企业微信通知发送成功: {title}")
                 else:
-                    logger.warning(f"企业微信通知发送失败: {title}")
+                    logger.warning(f"企业微信通知发送失败，尝试降级到其他渠道: {title}")
+                    # 企业微信失败时，尝试用 Server 酱或邮件作为备用
+                    if self._serverchan_key:
+                        self._send_serverchan(title, content)
         except Exception as e:
-            logger.warning(f"企业微信通知异常: {e}")
+            logger.warning(f"企业微信通知异常: {e}，尝试降级到其他渠道")
+            if self._serverchan_key:
+                self._send_serverchan(title, content)
 
     def _send_email(self, title: str, content: str) -> None:
         """通过邮件发送通知"""
