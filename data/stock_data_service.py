@@ -624,71 +624,62 @@ class StockDataService:
         """
         获取 VIX / VXN / OVX 恐慌指数。
         数据源:
-          1. 新浪行情 hf_VIX/hf_VXN/hf_OVX（直连，服务端/本地均可）
+          1. 新浪行情 fx_VIX/fx_VXN/fx_OVX（直连，服务端/本地均可）
           2. akshare（仅 VIX 备用）
         """
+        import re
         got = {"vix": False, "vxn": False, "ovx": False}
 
-        # --- 源1: 新浪行情 ---
+        # --- 源1: 新浪行情 fx_VIX/fx_VXN/fx_OVX ---
         sina_map = {
-            "hf_VIX": ("vix", "vix_change_pct"),
-            "hf_VXN": ("vxn", "vxn_change_pct"),
-            "hf_OVX": ("ovx", "ovx_change_pct"),
+            "fx_VIX": ("vix", "vix_change_pct"),
+            "fx_VXN": ("vxn", "vxn_change_pct"),
+            "fx_OVX": ("ovx", "ovx_change_pct"),
         }
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
         try:
-            codes = ",".join(sina_map.keys())
-            url = f"https://hq.sinajs.cn/list={codes}"
-            sessions = [self._http, self._create_proxy_session()]
-            for sess in sessions:
-                try:
-                    sess.headers["Referer"] = "https://finance.sina.com.cn"
-                    resp = sess.get(url, timeout=8)
-                    resp.encoding = "gbk"
-                    text = resp.text.strip()
-                    if not text:
-                        continue
-                    parsed_any = False
-                    for line in text.split("\n"):
-                        line = line.strip().rstrip(";")
-                        if "=" not in line:
+            for sina_code, (price_attr, chg_attr) in sina_map.items():
+                url = f"https://hq.sinajs.cn/?list={sina_code}"
+                for sess in [self._http, self._create_proxy_session()]:
+                    try:
+                        sess.headers.update({
+                            "Referer": "https://finance.sina.com.cn",
+                            "User-Agent": ua,
+                        })
+                        resp = sess.get(url, timeout=8)
+                        resp.encoding = "gbk"
+                        text = resp.text.strip()
+                        match = re.search(r'"([^"]+)"', text)
+                        if not match:
                             continue
-                        var_part, _, val_part = line.partition("=")
-                        val_part = val_part.strip().strip('"')
-                        if not val_part:
+                        fields = match.group(1).split(",")
+                        if len(fields) < 2:
                             continue
-                        parts = val_part.split(",")
-                        for sina_code, (price_attr, chg_attr) in sina_map.items():
-                            if sina_code.lower() not in var_part.lower():
-                                continue
+                        price = float(fields[1])  # fields[1] 是当前价
+                        if price <= 0:
+                            continue
+                        # 涨跌幅: fields[2] 或从 fields[4](前收) 计算
+                        chg_pct = 0.0
+                        try:
+                            if len(fields) > 2 and fields[2]:
+                                chg_pct = float(fields[2])
+                        except ValueError:
+                            pass
+                        if chg_pct == 0.0:
                             try:
-                                price = float(parts[0]) if parts[0] else 0.0
-                                if price <= 0:
-                                    break
-                                # 涨跌幅：尝试 parts[1]（部分格式直接带%变动）
-                                chg_pct = 0.0
-                                for idx in [1, 2, 3]:
-                                    if len(parts) > idx and parts[idx]:
-                                        try:
-                                            v = float(parts[idx])
-                                            # 合理的涨跌幅范围 -50% ~ +50%
-                                            if -50 < v < 50 and v != price:
-                                                chg_pct = v
-                                                break
-                                        except ValueError:
-                                            continue
-                                setattr(sentiment, price_attr, round(price, 2))
-                                setattr(sentiment, chg_attr, round(chg_pct, 2))
-                                got[price_attr] = True
-                                parsed_any = True
-                                logger.debug(f"[新浪] {sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
+                                prev = float(fields[4]) if len(fields) > 4 and fields[4] else 0.0
+                                if prev > 0:
+                                    chg_pct = (price - prev) / prev * 100
                             except (ValueError, IndexError):
                                 pass
-                            break
-                    if parsed_any:
-                        break
-                except Exception as e:
-                    logger.debug(f"[新浪VIX] session 失败: {e}")
-                    continue
+                        setattr(sentiment, price_attr, round(price, 2))
+                        setattr(sentiment, chg_attr, round(chg_pct, 2))
+                        got[price_attr] = True
+                        logger.debug(f"[新浪] {sina_code}: {price:.2f} ({chg_pct:+.2f}%)")
+                        break  # 当前标的成功，跳出 session 循环
+                    except Exception as e:
+                        logger.debug(f"[新浪VIX] {sina_code} session 失败: {e}")
+                        continue
         except Exception as e:
             logger.debug(f"新浪 VIX/VXN/OVX 失败: {e}")
 
