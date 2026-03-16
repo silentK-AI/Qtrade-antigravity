@@ -1,5 +1,5 @@
 """
-交易通知模块 - 支持微信（Server酱）、企业微信和邮件通知
+交易通知模块 - 支持微信（Server酱）、Pushplus 和邮件通知
 """
 import os
 import smtplib
@@ -16,7 +16,7 @@ class Notifier:
 
     支持:
     - Server酱（微信推送）: 设置环境变量 SERVERCHAN_KEY
-    - 企业微信: 设置 WECOM_CORP_ID/WECOM_AGENT_ID/WECOM_SECRET/WECOM_USER_ID
+    - Pushplus（推送加）: 设置 PUSHPLUS_TOKEN
     - 邮件通知: 设置 SMTP_HOST/SMTP_USER/SMTP_PASS/NOTIFY_EMAIL
     """
 
@@ -32,43 +32,35 @@ class Notifier:
         self._smtp_pass = os.getenv("SMTP_PASS", "")
         self._notify_email = os.getenv("NOTIFY_EMAIL", "")
 
-        # 企业微信配置
-        self._wecom_enabled = False
-        self._wecom_notifier = None
-        wecom_corp_id = os.getenv("WECOM_CORP_ID", "")
-        wecom_agent_id = os.getenv("WECOM_AGENT_ID", "")
-        wecom_secret = os.getenv("WECOM_SECRET", "")
-        wecom_user_id = os.getenv("WECOM_USER_ID", "")
+        # Pushplus 配置
+        self._pushplus_enabled = False
+        self._pushplus_notifier = None
+        pushplus_token = os.getenv("PUSHPLUS_TOKEN", "")
 
-        if wecom_corp_id and wecom_agent_id and wecom_secret and wecom_user_id:
+        if pushplus_token:
             try:
-                from monitor.wecom_notifier import WeCOMNotifier
-                self._wecom_notifier = WeCOMNotifier(
-                    corp_id=wecom_corp_id,
-                    agent_id=wecom_agent_id,
-                    secret=wecom_secret,
-                    user_id=wecom_user_id,
-                )
-                self._wecom_enabled = True
-                logger.debug(f"Notifier: 企业微信已配置 (CorpID: {wecom_corp_id[:8]}...)")
+                from monitor.pushplus_notifier import PushplusNotifier
+                self._pushplus_notifier = PushplusNotifier(token=pushplus_token)
+                self._pushplus_enabled = True
+                logger.debug(f"Notifier: Pushplus 已配置 (Token 前缀: {pushplus_token[:8]}...)")
             except Exception as e:
-                logger.warning(f"Notifier: 企业微信初始化失败: {e}")
+                logger.warning(f"Notifier: Pushplus 初始化失败: {e}")
 
         if self._serverchan_key:
             logger.debug(f"Notifier: Server酱已配置 (Key前缀: {self._serverchan_key[:4]})")
         
-        if not self._serverchan_key and not self._wecom_enabled and not self._smtp_host:
+        if not self._serverchan_key and not self._pushplus_enabled and not self._smtp_host:
             logger.warning("Notifier: 未配置任何通知渠道！")
 
     def send(self, title: str, content: str) -> None:
         """发送通知（同时发送所有已配置的渠道）"""
         if self._serverchan_key:
             self._send_serverchan(title, content)
-        if self._wecom_enabled:
-            self._send_wecom(title, content)
+        if self._pushplus_enabled:
+            self._send_pushplus(title, content)
         if self._smtp_host and self._notify_email:
             self._send_email(title, content)
-        if not self._serverchan_key and not self._wecom_enabled and not self._smtp_host:
+        if not self._serverchan_key and not self._pushplus_enabled and not self._smtp_host:
             logger.debug(f"通知（未配置推送渠道）: {title}")
 
     def notify_trade(
@@ -132,22 +124,17 @@ class Notifier:
         except Exception as e:
             logger.warning(f"Server酱通知异常: {e}")
 
-    def _send_wecom(self, title: str, content: str) -> None:
-        """通过企业微信推送通知"""
+    def _send_pushplus(self, title: str, content: str) -> None:
+        """通过 Pushplus 推送通知"""
         try:
-            if self._wecom_notifier:
-                success = self._wecom_notifier.send_markdown(content, title)
+            if self._pushplus_notifier:
+                success = self._pushplus_notifier.send_markdown(title, content)
                 if success:
-                    logger.debug(f"企业微信通知发送成功: {title}")
+                    logger.debug(f"Pushplus 通知发送成功: {title}")
                 else:
-                    logger.warning(f"企业微信通知发送失败，尝试降级到其他渠道: {title}")
-                    # 企业微信失败时，尝试用 Server 酱或邮件作为备用
-                    if self._serverchan_key:
-                        self._send_serverchan(title, content)
+                    logger.warning(f"Pushplus 通知发送失败: {title}")
         except Exception as e:
-            logger.warning(f"企业微信通知异常: {e}，尝试降级到其他渠道")
-            if self._serverchan_key:
-                self._send_serverchan(title, content)
+            logger.warning(f"Pushplus 通知异常: {e}")
 
     def _send_email(self, title: str, content: str) -> None:
         """通过邮件发送通知"""
