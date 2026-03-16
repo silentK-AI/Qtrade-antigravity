@@ -290,22 +290,27 @@ class StockPricePredictor:
             dir_model = XGBRegressor(**params)
             dir_model.fit(X, y_dir)
 
-            # 验证 R²（最后 20% 数据）
+            # 验证（最后 20% 数据）
             split = max(1, int(len(X) * 0.8))
             X_val = X[split:]
             r2 = 0.5
+            mae_pct = 999.0  # 平均误差百分比
             if len(X_val) > 3:
-                from sklearn.metrics import r2_score
+                from sklearn.metrics import r2_score, mean_absolute_error
                 r2_range = r2_score(y_range[split:], range_model.predict(X_val))
                 r2_dir   = r2_score(y_dir[split:],   dir_model.predict(X_val))
                 r2 = max(0.0, (r2_range + r2_dir) / 2)
+                # 用高低价 MAE% 作为误差指标（更直观）
+                mae_range = mean_absolute_error(y_range[split:], range_model.predict(X_val))
+                mae_dir   = mean_absolute_error(y_dir[split:],   dir_model.predict(X_val))
+                mae_pct   = round((mae_range + mae_dir) / 2, 3)  # 平均绝对误差 %
                 logger.debug(
                     f"[{symbol}] 波动率 R²={r2_range:.3f} 方向 R²={r2_dir:.3f} "
-                    f"样本={len(X)}"
+                    f"MAE={mae_pct:.3f}% 样本={len(X)}"
                 )
 
-            self._models[symbol] = (range_model, dir_model, r2, len(X))
-            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f}")
+            self._models[symbol] = (range_model, dir_model, r2, len(X), mae_pct)
+            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} MAE={mae_pct:.3f}%")
             return True
 
         except Exception as e:
@@ -326,7 +331,7 @@ class StockPricePredictor:
             if feat is None:
                 return None
 
-            range_model, dir_model, r2, n_samples = self._models[symbol]
+            range_model, dir_model, r2, n_samples, mae_pct = self._models[symbol]
             X = feat.reshape(1, -1)
 
             pred_range = float(range_model.predict(X)[0])  # 预测波动率 %
@@ -350,7 +355,7 @@ class StockPricePredictor:
 
             logger.debug(
                 f"[{symbol}] 预测: 高={pred_high:.3f} 低={pred_low:.3f} "
-                f"波动={pred_range:.2f}% 方向={pred_dir:+.2f}%"
+                f"波动={pred_range:.2f}% 方向={pred_dir:+.2f}% MAE={mae_pct:.3f}%"
             )
 
             return StockPricePrediction(
@@ -359,7 +364,7 @@ class StockPricePredictor:
                 pred_high=pred_high,
                 pred_low=pred_low,
                 pred_range_pct=round(pred_range, 2),
-                confidence=round(r2, 3),
+                confidence=round(mae_pct, 3),  # 用 MAE% 作为误差指标
                 last_close=last_close,
                 model_samples=n_samples,
             )
