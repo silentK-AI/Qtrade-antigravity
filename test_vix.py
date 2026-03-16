@@ -1,21 +1,22 @@
 import requests
-import json
 
-ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
-headers = {"User-Agent": ua, "Referer": "https://finance.sina.com.cn"}
+ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+headers = {"User-Agent": ua}
 
-# 测试新浪历史K线接口获取VIX昨收价
+# stooq.com - 国内可直连，提供VIX/VXN/OVX历史数据
 test_cases = [
-    ("VIX",  "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=hf_VIX&scale=240&ma=no&datalen=3"),
-    ("VXN",  "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=hf_VXN&scale=240&ma=no&datalen=3"),
-    ("OVX",  "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=hf_OVX&scale=240&ma=no&datalen=3"),
+    ("VIX", "https://stooq.com/q/d/l/?s=%5Evix&i=d"),
+    ("VXN", "https://stooq.com/q/d/l/?s=%5Evxn&i=d"),
+    ("OVX", "https://stooq.com/q/d/l/?s=%5Eovx&i=d"),
 ]
 
 for name, url in test_cases:
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        r.encoding = "utf-8"
-        text = r.text.strip()
-        print(f"{name}: {text[:200]}")
+        lines = r.text.strip().split("\n")
+        print(f"{name} status={r.status_code} lines={len(lines)}")
+        if len(lines) >= 2:
+            print(f"  header: {lines[0]}")
+            print(f"  last:   {lines[-1]}")
     except Exception as e:
         print(f"{name} 失败: {e}")
