@@ -174,10 +174,12 @@ class StockAlertMonitor:
             open_chg = (open_p  - prev_close) / prev_close * 100 if prev_close > 0 and open_p > 0 else 0.0
 
             # 买卖触发逻辑
-            # 卖出：开盘价 >= 预测高（最高优先级）
-            # 买入：开盘价 <= 预测低
-            sell_trigger = open_p > 0 and pred_high > 0 and open_p >= pred_high
-            buy_trigger  = open_p > 0 and pred_low  > 0 and open_p <= pred_low
+            # 最高优先级：开盘价 > 预测高
+            # 买入：实际最低价 <= 预测低
+            # 卖出：实际最高价 >= 预测高
+            priority_sell = open_p > 0 and pred_high > 0 and open_p > pred_high
+            buy_trigger   = low_p  > 0 and pred_low  > 0 and low_p  <= pred_low
+            sell_trigger  = high_p > 0 and pred_high > 0 and high_p >= pred_high
 
             amt = ALERT_TRADE_AMOUNT
 
@@ -185,32 +187,36 @@ class StockAlertMonitor:
             static_pnl = round(amt * chg_pct / 100, 2)
 
             # 操作盈亏
-            if sell_trigger and not buy_trigger:
-                # 只卖没买：开盘>=预测高，按开盘涨跌幅计算（最高优先级规则）
+            if priority_sell:
+                # 最高优先级：开盘>预测高，操作盈亏 = 开盘涨跌幅 × 金额
                 op_pnl = round(amt * open_chg / 100, 2)
-            elif buy_trigger and not sell_trigger:
-                # 只买没卖：买入价=预测低，卖出=收盘
-                op_pnl = round(amt * (close_p - pred_low) / pred_low, 2) if pred_low > 0 else 0.0
+                logic  = f"开盘价 {open_p:.3f}＞预测高 {pred_high:.3f}，触发最高优先级，操作盈亏={open_chg:+.2f}%×{amt}"
+                buy_show  = "❌"
+                sell_show = "✅"
             elif buy_trigger and sell_trigger:
-                # 买卖都触发：买收益 + 卖收益
                 buy_pnl  = amt * (close_p - pred_low)  / pred_low  if pred_low  > 0 else 0.0
                 sell_pnl = amt * (pred_high - open_p)  / pred_high if pred_high > 0 else 0.0
                 op_pnl   = round(buy_pnl + sell_pnl, 2)
+                bp = round(buy_pnl, 2)
+                sp = round(sell_pnl, 2)
+                logic     = f"买卖都触发，买:{bp:+.2f}+卖:{sp:+.2f}={op_pnl:+.2f}"
+                buy_show  = "✅"
+                sell_show = "✅"
+            elif buy_trigger:
+                op_pnl = round(amt * (close_p - pred_low) / pred_low, 2) if pred_low > 0 else 0.0
+                logic  = f"只买没卖，{amt}×({close_p:.3f}-{pred_low:.3f})÷{pred_low:.3f}={op_pnl:+.2f}"
+                buy_show  = "✅"
+                sell_show = "❌"
+            elif sell_trigger:
+                op_pnl = round(amt * (pred_high - open_p) / pred_high, 2) if pred_high > 0 else 0.0
+                logic  = f"只卖没买，{amt}×({pred_high:.3f}-{open_p:.3f})÷{pred_high:.3f}={op_pnl:+.2f}"
+                buy_show  = "❌"
+                sell_show = "✅"
             else:
-                # 无操作
                 op_pnl = static_pnl
-
-            # 盈亏说明
-            if sell_trigger and not buy_trigger:
-                logic = f"开盘价 {open_p:.3f}≥预测高 {pred_high:.3f}，触发最高优先级，操作盈亏={open_chg:+.2f}%×{amt}"
-            elif buy_trigger and not sell_trigger:
-                logic = f"只买没卖，{amt}×({close_p:.3f}-{pred_low:.3f})÷{pred_low:.3f}={op_pnl:.2f}"
-            elif buy_trigger and sell_trigger:
-                bp = round(amt * (close_p - pred_low)  / pred_low,  2) if pred_low  > 0 else 0.0
-                sp = round(amt * (pred_high - open_p)  / pred_high, 2) if pred_high > 0 else 0.0
-                logic = f"买卖都触发，买:{bp:.2f}+卖:{sp:.2f}={op_pnl:.2f}"
-            else:
-                logic = f"无买无卖，操作盈亏=不动盈亏={chg_pct:+.2f}%×{amt}"
+                logic  = f"无买无卖，操作盈亏=不动盈亏={chg_pct:+.2f}%×{amt}"
+                buy_show  = "❌"
+                sell_show = "❌"
 
             rows.append({
                 "name":      name,
@@ -223,8 +229,8 @@ class StockAlertMonitor:
                 "close":     close_p,
                 "chg_pct":   chg_pct,
                 "open_chg":  open_chg,
-                "buy":       "✅" if buy_trigger  else "❌",
-                "sell":      "✅" if sell_trigger else "❌",
+                "buy":       buy_show,
+                "sell":      sell_show,
                 "static_pnl": static_pnl,
                 "op_pnl":    op_pnl,
                 "logic":     logic,
