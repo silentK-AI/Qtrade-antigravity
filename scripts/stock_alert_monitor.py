@@ -38,6 +38,8 @@ from loguru import logger
 from config.stock_settings import (
     STOCK_ALERT_SYMBOLS,
     ALERT_PREMARKET_TIME,
+    ALERT_CLOSE_TIME,
+    ALERT_TRADE_AMOUNT,
     ALERT_SCAN_INTERVAL,
     ALERT_SIGNAL_COOLDOWN,
     ALERT_HISTORY_DAYS,
@@ -104,6 +106,10 @@ class StockAlertMonitor:
             # 盘中监控循环
             self._intraday_monitor()
 
+        if mode == "close":
+            self._load_history_data()
+            self._close_report()
+
         logger.info("监控器退出。")
 
     # ------------------------------------------------------------------
@@ -125,6 +131,138 @@ class StockAlertMonitor:
             time.sleep(1.5)
 
         logger.info(f"历史数据加载完成: {len(self._klines_cache)}/{len(STOCK_ALERT_SYMBOLS)} 只成功")
+
+    def _close_report(self):
+        """收盘后汇总：预测 vs 实际，计算模拟盈亏并推送"""
+        logger.info("=== 收盘报告生成 ===")
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # 先做预测（训练模型，获取昨日预测值）
+        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+            klines = self._klines_cache.get(symbol)
+            if klines is None:
+                continue
+            try:
+                pred = self._predictor.train_and_predict(symbol, cfg["name"], klines)
+                if pred:
+                    self._predictions[symbol] = pred
+            except Exception as e:
+                logger.warning(f"[{symbol}] 预测失败: {e}")
+
+        # 获取今日实时行情（收盘价、开盘、最高、最低）
+        all_symbols = list(STOCK_ALERT_SYMBOLS.keys())
+        quotes = self._data_service.fetch_realtime_quotes(all_symbols)
+
+        rows = []
+        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+            quote = quotes.get(symbol)
+            pred  = self._predictions.get(symbol)
+            if not quote or not pred:
+                continue
+
+            name       = cfg["name"]
+            pred_high  = pred.pred_high
+            pred_low   = pred.pred_low
+            open_p     = quote.open if hasattr(quote, "open") and quote.open else 0.0
+            high_p     = quote.high if hasattr(quote, "high") and quote.high else 0.0
+            low_p      = quote.low  if hasattr(quote, "low")  and quote.low  else 0.0
+            close_p    = quote.price
+            prev_close = quote.prev_close if quote.prev_close else 0.0
+
+            # 涨跌幅
+            chg_pct  = (close_p - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
+            open_chg = (open_p  - prev_close) / prev_close * 100 if prev_close > 0 and open_p > 0 else 0.0
+
+            # 买卖触发逻辑
+            # 卖出：开盘价 >= 预测高（最高优先级）
+            # 买入：开盘价 <= 预测低
+            sell_trigger = open_p > 0 and pred_high > 0 and open_p >= pred_high
+            buy_trigger  = open_p > 0 and pred_low  > 0 and open_p <= pred_low
+
+            amt = ALERT_TRADE_AMOUNT
+
+            # 不动盈亏：持有不操作，按收盘涨跌幅
+            static_pnl = round(amt * chg_pct / 100, 2)
+
+            # 操作盈亏
+            if sell_trigger and not buy_trigger:
+                # 只卖没买：开盘>=预测高，按开盘涨跌幅计算（最高优先级规则）
+                op_pnl = round(amt * open_chg / 100, 2)
+            elif buy_trigger and not sell_trigger:
+                # 只买没卖：买入价=预测低，卖出=收盘
+                op_pnl = round(amt * (close_p - pred_low) / pred_low, 2) if pred_low > 0 else 0.0
+            elif buy_trigger and sell_trigger:
+                # 买卖都触发：买收益 + 卖收益
+                buy_pnl  = amt * (close_p - pred_low)  / pred_low  if pred_low  > 0 else 0.0
+                sell_pnl = amt * (pred_high - open_p)  / pred_high if pred_high > 0 else 0.0
+                op_pnl   = round(buy_pnl + sell_pnl, 2)
+            else:
+                # 无操作
+                op_pnl = static_pnl
+
+            # 盈亏说明
+            if sell_trigger and not buy_trigger:
+                logic = f"开盘价 {open_p:.3f}≥预测高 {pred_high:.3f}，触发最高优先级，操作盈亏={open_chg:+.2f}%×{amt}"
+            elif buy_trigger and not sell_trigger:
+                logic = f"只买没卖，{amt}×({close_p:.3f}-{pred_low:.3f})÷{pred_low:.3f}={op_pnl:.2f}"
+            elif buy_trigger and sell_trigger:
+                bp = round(amt * (close_p - pred_low)  / pred_low,  2) if pred_low  > 0 else 0.0
+                sp = round(amt * (pred_high - open_p)  / pred_high, 2) if pred_high > 0 else 0.0
+                logic = f"买卖都触发，买:{bp:.2f}+卖:{sp:.2f}={op_pnl:.2f}"
+            else:
+                logic = f"无买无卖，操作盈亏=不动盈亏={chg_pct:+.2f}%×{amt}"
+
+            rows.append({
+                "name":      name,
+                "symbol":    symbol,
+                "pred_high": pred_high,
+                "pred_low":  pred_low,
+                "open":      open_p,
+                "high":      high_p,
+                "low":       low_p,
+                "close":     close_p,
+                "chg_pct":   chg_pct,
+                "open_chg":  open_chg,
+                "buy":       "✅" if buy_trigger  else "❌",
+                "sell":      "✅" if sell_trigger else "❌",
+                "static_pnl": static_pnl,
+                "op_pnl":    op_pnl,
+                "logic":     logic,
+            })
+
+        content = self._format_close_content(date_str, rows)
+        logger.info(f"收盘报告生成完成，共 {len(rows)} 条")
+        self._notifier.notify_premarket_report(content)  # 复用同一推送通道
+        logger.info("收盘报告推送完成 ✓")
+
+    def _format_close_content(self, date_str: str, rows: list) -> str:
+        """格式化收盘报告为 Markdown 表格"""
+        lines = [
+            f"# 📊 收盘回测报告\n> {date_str}\n",
+            f"模拟每笔金额：**{ALERT_TRADE_AMOUNT:,} 元**\n",
+            "| 标的 | 预测高 | 预测低 | 开盘 | 最高 | 最低 | 收盘 | 涨跌幅 | 开盘涨跌 | 买入 | 卖出 | 不动盈亏 | 操作盈亏 | 盈亏说明 |",
+            "|------|--------|--------|------|------|------|------|--------|----------|------|------|----------|----------|----------|",
+        ]
+        total_static = 0.0
+        total_op     = 0.0
+        for r in rows:
+            lines.append(
+                f"| {r['name']}({r['symbol']}) "
+                f"| {r['pred_high']:.3f} | {r['pred_low']:.3f} "
+                f"| {r['open']:.3f} | {r['high']:.3f} | {r['low']:.3f} | {r['close']:.3f} "
+                f"| {r['chg_pct']:+.2f}% | {r['open_chg']:+.2f}% "
+                f"| {r['buy']} | {r['sell']} "
+                f"| {r['static_pnl']:+.2f} | {r['op_pnl']:+.2f} "
+                f"| {r['logic']} |"
+            )
+            total_static += r["static_pnl"]
+            total_op     += r["op_pnl"]
+
+        lines.append("")
+        lines.append(f"**汇总** — 不动盈亏合计：{total_static:+.2f} 元 ｜ 操作盈亏合计：{total_op:+.2f} 元")
+        op_advantage = total_op - total_static
+        lines.append(f"**预测策略超额收益**：{op_advantage:+.2f} 元（vs 持有不动）")
+        return "\n".join(lines)
 
     def _premarket_report(self):
         """生成并推送盘前技术分析报告"""
@@ -553,6 +691,10 @@ def main():
         "--intraday", action="store_true",
         help="仅运行盘中监控"
     )
+    parser.add_argument(
+        "--close", action="store_true",
+        help="仅运行收盘报告"
+    )
     args = parser.parse_args()
 
     monitor = StockAlertMonitor()
@@ -561,6 +703,8 @@ def main():
         monitor.run("premarket")
     elif args.intraday:
         monitor.run("intraday")
+    elif args.close:
+        monitor.run("close")
     else:
         monitor.run("full")
 

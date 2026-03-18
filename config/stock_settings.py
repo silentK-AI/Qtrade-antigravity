@@ -34,6 +34,8 @@ STOCK_ALERT_SYMBOLS = {
 }
 
 ALERT_PREMARKET_TIME = "09:15"      # 盘前报告推送时间
+ALERT_CLOSE_TIME    = "15:05"      # 收盘报告推送时间
+ALERT_TRADE_AMOUNT  = 10000        # 模拟每笔操作金额（元）
 ALERT_SCAN_INTERVAL = 30            # 盘中扫描间隔（秒）
 ALERT_SIGNAL_COOLDOWN = 1800        # 同一标的同方向信号冷却时间（秒）= 30分钟
 ALERT_HISTORY_DAYS = 260            # 技术指标需要的历史数据天数（260天支持MA250和近1年涨跌幅）
