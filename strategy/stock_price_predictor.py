@@ -365,6 +365,32 @@ class StockPricePredictor:
 
             self._models[symbol] = (range_model, dir_model, r2, len(X), mae_pct)
             logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f} MAE={mae_pct:.3f}%")
+
+            # ── Feature Importance Top10 ──
+            try:
+                feat_names = [
+                    "动量1d","动量3d","动量5d","动量10d","动量20d",
+                    "ATR5","ATR10","ATR20","历史波动率",
+                    "均线偏离MA5","均线偏离MA10","均线偏离MA20","均线偏离MA60",
+                    "MA5斜率","MA20斜率",
+                    "K线实体比","上影线","下影线","收盘位置",
+                    "量比5d","量比20d","RSI14","布林带宽","星期几",
+                    "昨日上影空间","昨日下影空间","开盘vs昨高","开盘vs昨低",
+                    "振幅1d","振幅5d","振幅10d",
+                    "开盘跳空","开盘vsMA5",
+                    "大盘涨跌","竞价量比",
+                ]
+                imp_range = range_model.feature_importances_
+                imp_dir   = dir_model.feature_importances_
+                imp_avg   = (imp_range + imp_dir) / 2
+                top_idx   = np.argsort(imp_avg)[::-1][:10]
+                top_str   = ", ".join(
+                    f"{feat_names[i] if i < len(feat_names) else f'f{i}'}={imp_avg[i]:.3f}"
+                    for i in top_idx
+                )
+                logger.debug(f"[{symbol}] Top10特征重要性: {top_str}")
+            except Exception:
+                pass
             return True
 
         except Exception as e:
