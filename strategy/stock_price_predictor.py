@@ -67,7 +67,7 @@ class StockPricePredictor:
     """
 
     # 特征维度
-    N_FEATURES = 28
+    N_FEATURES = 35
 
     def __init__(self, model_dir: str = "models/stock"):
         self._model_dir = Path(model_dir)
@@ -224,6 +224,39 @@ class StockPricePredictor:
                 from datetime import datetime as _dt
                 dow = _dt.now().weekday()
             feats.append(float(dow))
+
+            # ── 昨日高低点 (4) ── 支撑压力直接因子
+            prev_h = highs[-2] if len(highs) >= 2 else h
+            prev_l = lows[-2]  if len(lows)  >= 2 else l
+            # 昨高/昨收、昨低/昨收（标准化）
+            feats.append((prev_h / pc - 1) * 100 if pc > 0 else 0.0)   # 昨日上影空间
+            feats.append((pc - prev_l) / pc * 100 if pc > 0 else 0.0)  # 昨日下影空间
+            # 开盘相对昨高/昨低（开盘位置强弱）
+            feats.append((o / prev_h - 1) * 100 if prev_h > 0 else 0.0)  # 开盘vs昨高
+            feats.append((o / prev_l - 1) * 100 if prev_l > 0 else 0.0)  # 开盘vs昨低
+
+            # ── 日内振幅 (3) ── importance 第1梯队
+            # 近1日振幅
+            amp1 = (prev_h - prev_l) / pc * 100 if pc > 0 and prev_h > prev_l else 0.0
+            feats.append(amp1)
+            # 近5日平均振幅
+            if len(highs) >= 6 and len(lows) >= 6:
+                amp5 = float(np.mean([
+                    (highs[-(i+2)] - lows[-(i+2)]) / closes[-(i+2)] * 100
+                    for i in range(5) if closes[-(i+2)] > 0
+                ]))
+            else:
+                amp5 = amp1
+            feats.append(amp5)
+            # 近10日平均振幅
+            if len(highs) >= 11 and len(lows) >= 11:
+                amp10 = float(np.mean([
+                    (highs[-(i+2)] - lows[-(i+2)]) / closes[-(i+2)] * 100
+                    for i in range(10) if closes[-(i+2)] > 0
+                ]))
+            else:
+                amp10 = amp5
+            feats.append(amp10)
 
             # ── 开盘价因子 (2) ── 仅预测时有效，训练时用历史开盘
             # 开盘跳空幅度：(open - prev_close) / prev_close * 100
