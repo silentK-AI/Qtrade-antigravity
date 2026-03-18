@@ -194,8 +194,9 @@ class StockAlertMonitor:
                 buy_show  = "❌"
                 sell_show = "✅"
             elif buy_trigger and sell_trigger:
-                buy_pnl  = amt * (close_p - pred_low)  / pred_low  if pred_low  > 0 else 0.0
-                sell_pnl = amt * (pred_high - open_p)  / pred_high if pred_high > 0 else 0.0
+                # 买卖都触发：新买持有到收盘 + 原仓位在预测高卖出
+                buy_pnl  = amt * (close_p - pred_low) / pred_low if pred_low > 0 else 0.0
+                sell_pnl = amt * (pred_high - prev_close) / prev_close if prev_close > 0 else 0.0
                 op_pnl   = round(buy_pnl + sell_pnl, 2)
                 bp = round(buy_pnl, 2)
                 sp = round(sell_pnl, 2)
@@ -203,13 +204,17 @@ class StockAlertMonitor:
                 buy_show  = "✅"
                 sell_show = "✅"
             elif buy_trigger:
-                op_pnl = round(amt * (close_p - pred_low) / pred_low, 2) if pred_low > 0 else 0.0
-                logic  = f"只买没卖，{amt}×({close_p:.3f}-{pred_low:.3f})÷{pred_low:.3f}={op_pnl:+.2f}"
+                # 只买不卖：新买持有到收盘 + 原仓位持有当天涨跌
+                buy_pnl    = amt * (close_p - pred_low) / pred_low if pred_low > 0 else 0.0
+                hold_pnl   = amt * chg_pct / 100
+                op_pnl     = round(buy_pnl + hold_pnl, 2)
+                logic      = f"只买不卖，买:{round(buy_pnl,2):+.2f}+持仓:{round(hold_pnl,2):+.2f}={op_pnl:+.2f}"
                 buy_show  = "✅"
                 sell_show = "❌"
             elif sell_trigger:
-                op_pnl = round(amt * (pred_high - open_p) / pred_high, 2) if pred_high > 0 else 0.0
-                logic  = f"只卖没买，{amt}×({pred_high:.3f}-{open_p:.3f})÷{pred_high:.3f}={op_pnl:+.2f}"
+                # 只卖没买：原仓位在预测高卖出
+                op_pnl = round(amt * (pred_high - prev_close) / prev_close, 2) if prev_close > 0 else 0.0
+                logic  = f"只卖没买，{amt}×({pred_high:.3f}-{prev_close:.3f})÷{prev_close:.3f}={op_pnl:+.2f}"
                 buy_show  = "❌"
                 sell_show = "✅"
             else:
