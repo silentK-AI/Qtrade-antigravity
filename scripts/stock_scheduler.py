@@ -92,7 +92,7 @@ def start_scheduler():
     
     # 设定定时任务
     schedule.every().day.at("08:30").do(job_start_alert_monitor)
-    schedule.every().day.at("16:30").do(job_stop_alert_monitor)  # 改为16:30，给盘后报告留足时间
+    schedule.every().day.at("15:30").do(job_stop_alert_monitor)  # A股收盘后兜底终止
     
     # 打印当前所有排期的任务
     logger.info("当前设定的定时任务:")

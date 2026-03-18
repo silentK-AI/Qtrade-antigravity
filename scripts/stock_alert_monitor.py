@@ -538,9 +538,9 @@ class StockAlertMonitor:
                 hk_active = self._is_hk_trading_time(now)
 
                 if not a_share_active and not hk_active:
-                    # 如果 A 股和港股都不在交易时间
-                    if now.hour >= 16:
-                        logger.info("港股收盘，监控结束")
+                    # A 股 15:00 收盘后直接退出，不等港股
+                    if now.hour >= 15:
+                        logger.info("A股收盘（15:00），监控结束")
                         break
                     elif now.hour < 9 or (now.hour == 9 and now.minute < 30):
                         logger.debug("等待开盘...")
@@ -552,8 +552,8 @@ class StockAlertMonitor:
                         time.sleep(30)
                         continue
 
-                # 确定本轮需要扫描的标的
-                scan_symbols = self._get_active_symbols(a_share_active, hk_active)
+                # 确定本轮需要扫描的标的（只扫A股）
+                scan_symbols = self._get_active_symbols(a_share_active, False)
 
                 if scan_symbols:
                     self._scan_cycle(scan_symbols)
