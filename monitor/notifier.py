@@ -103,6 +103,13 @@ class Notifier:
         title = f"📊 盘前技术分析 | {date_str}"
         self.send(title, content)
 
+    def notify_close_report(self, content: str) -> None:
+        """发送盘后回测报告"""
+        from datetime import datetime
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        title = f"📈 盘后回测报告 | {date_str}"
+        self.send(title, content)
+
     def notify_trade_alert(self, content: str) -> None:
         """发送盘中交易信号提醒"""
         self.send("⚡ 交易信号提醒", content)

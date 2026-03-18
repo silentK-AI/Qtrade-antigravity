@@ -243,36 +243,39 @@ class StockAlertMonitor:
 
         content = self._format_close_content(date_str, rows)
         logger.info(f"收盘报告生成完成，共 {len(rows)} 条")
-        self._notifier.notify_premarket_report(content)  # 复用同一推送通道
+        self._notifier.notify_close_report(content)
         logger.info("收盘报告推送完成 ✓")
 
     def _format_close_content(self, date_str: str, rows: list) -> str:
-        """格式化收盘报告为 Markdown 表格"""
-        lines = [
-            f"# 📊 收盘回测报告\n> {date_str}\n",
-            f"模拟每笔金额：**{ALERT_TRADE_AMOUNT:,} 元**\n",
-            "| 标的 | 预测高 | 预测低 | 开盘 | 最高 | 最低 | 收盘 | 涨跌幅 | 开盘涨跌 | 买入 | 卖出 | 不动盈亏 | 操作盈亏 | 盈亏说明 |",
-            "|------|--------|--------|------|------|------|------|--------|----------|------|------|----------|----------|----------|",
-        ]
-        total_static = 0.0
-        total_op     = 0.0
-        for r in rows:
-            lines.append(
-                f"| {r['name']}({r['symbol']}) "
-                f"| {r['pred_high']:.3f} | {r['pred_low']:.3f} "
-                f"| {r['open']:.3f} | {r['high']:.3f} | {r['low']:.3f} | {r['close']:.3f} "
-                f"| {r['chg_pct']:+.2f}% | {r['open_chg']:+.2f}% "
-                f"| {r['buy']} | {r['sell']} "
-                f"| {r['static_pnl']:+.2f} | {r['op_pnl']:+.2f} "
-                f"| {r['logic']} |"
-            )
-            total_static += r["static_pnl"]
-            total_op     += r["op_pnl"]
-
-        lines.append("")
-        lines.append(f"**汇总** — 不动盈亏合计：{total_static:+.2f} 元 ｜ 操作盈亏合计：{total_op:+.2f} 元")
+        """格式化收盘报告为 Pushplus 友好的竖排卡片格式"""
+        total_static = sum(r["static_pnl"] for r in rows)
+        total_op     = sum(r["op_pnl"]     for r in rows)
         op_advantage = total_op - total_static
-        lines.append(f"**预测策略超额收益**：{op_advantage:+.2f} 元（vs 持有不动）")
+
+        lines = [
+            f"# 📈 盘后回测报告\n> {date_str}　模拟每笔：**{ALERT_TRADE_AMOUNT:,} 元**\n",
+            f"**汇总** — 不动盈亏：{total_static:+.2f} 元 ｜ 操作盈亏：{total_op:+.2f} 元 ｜ 超额：{op_advantage:+.2f} 元\n",
+            "---\n",
+        ]
+
+        for r in rows:
+            buy_sell = f"买{r['buy']} 卖{r['sell']}"
+            pnl_icon = "🟢" if r['op_pnl'] >= 0 else "🔴"
+            lines.append(
+                f"### {r['name']}（{r['symbol']}）\n"
+                f"| 项目 | 数值 |\n"
+                f"|------|------|\n"
+                f"| 预测区间 | {r['pred_low']:.3f} ~ {r['pred_high']:.3f} |\n"
+                f"| 开/高/低/收 | {r['open']:.3f} / {r['high']:.3f} / {r['low']:.3f} / {r['close']:.3f} |\n"
+                f"| 涨跌幅 | {r['chg_pct']:+.2f}% （开盘 {r['open_chg']:+.2f}%）|\n"
+                f"| 操作 | {buy_sell} |\n"
+                f"| 不动盈亏 | {r['static_pnl']:+.2f} 元 |\n"
+                f"| 操作盈亏 | {pnl_icon} **{r['op_pnl']:+.2f} 元** |\n"
+                f"| 说明 | {r['logic']} |\n"
+            )
+
+        lines.append("---\n")
+        lines.append(f"**合计** 不动：{total_static:+.2f} 元 ｜ 操作：{total_op:+.2f} 元 ｜ 超额：{op_advantage:+.2f} 元")
         return "\n".join(lines)
 
     def _premarket_report(self):
