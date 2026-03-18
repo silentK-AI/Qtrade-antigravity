@@ -294,7 +294,28 @@ class StockAlertMonitor:
                 q = quotes.get(symbol) if quotes else None
                 if q and hasattr(q, 'open') and q.open and q.open > 0:
                     today_open = float(q.open)
-                pred = self._predictor.train_and_predict(symbol, cfg["name"], klines, today_open=today_open)
+
+                # 大盘涨跌幅（上证）
+                market_chg = sentiment.sh_change_pct if sentiment else 0.0
+
+                # 竞价量比：竞价成交量 / 历史20日均量
+                auction_vol_ratio = 0.0
+                if q and q.volume > 0 and klines is not None and len(klines) >= 20:
+                    try:
+                        norm = self._predictor._normalize_df(klines)
+                        if norm is not None and len(norm) >= 20:
+                            avg_vol = float(norm["volume"].iloc[-20:].mean())
+                            if avg_vol > 0:
+                                auction_vol_ratio = round(q.volume / avg_vol, 2)
+                    except Exception:
+                        pass
+
+                pred = self._predictor.train_and_predict(
+                    symbol, cfg["name"], klines,
+                    today_open=today_open,
+                    market_change_pct=market_chg,
+                    auction_vol_ratio=auction_vol_ratio,
+                )
                 if pred:
                     self._predictions[symbol] = pred
                     logger.info(
@@ -302,6 +323,8 @@ class StockAlertMonitor:
                         f"低={pred.pred_low:.3f} 波动={pred.pred_range_pct:.2f}% "
                         f"置信={pred.confidence:.2f}"
                         + (f" 开盘={today_open:.3f}" if today_open > 0 else "")
+                        + (f" 大盘={market_chg:+.2f}%" if market_chg != 0 else "")
+                        + (f" 量比={auction_vol_ratio:.2f}" if auction_vol_ratio > 0 else "")
                     )
             except Exception as e:
                 logger.warning(f"  [{symbol}] 预测失败: {e}")

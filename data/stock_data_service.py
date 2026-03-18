@@ -64,6 +64,8 @@ class MarketSentiment:
     ovx_change_pct: float = 0.0 # OVX 涨跌幅 (%)
     fear_greed: int = -1        # 韭圈儿恐贪指数（0-100, -1=未获取）
     fear_greed_label: str = ""  # 恐贪指数标签（极度恐慌/恐慌/中性/贪婪/极度贪婪）
+    sh_change_pct: float = 0.0  # 上证指数涨跌幅 (%)
+    sz_change_pct: float = 0.0  # 深证成指涨跌幅 (%)
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -574,7 +576,7 @@ class StockDataService:
         return sentiment
 
     def _fetch_updown_stats(self, sentiment: MarketSentiment):
-        """从腾讯接口获取大盘涨跌家数"""
+        """从腾讯接口获取大盘涨跌家数及上证/深证涨跌幅"""
         try:
             # 上证指数获取市场概况
             url = "https://qt.gtimg.cn/q=sh000001,sz399001"
@@ -596,6 +598,12 @@ class StockDataService:
                             if len(parts) > 42:
                                 sentiment.up_count = int(float(parts[41] or 0))
                                 sentiment.down_count = int(float(parts[42] or 0))
+                            # parts[32]=涨跌幅%
+                            if len(parts) > 32 and parts[32]:
+                                sentiment.sh_change_pct = round(float(parts[32]), 2)
+                        elif "sz399001" in line or parts[2] == "399001":
+                            if len(parts) > 32 and parts[32]:
+                                sentiment.sz_change_pct = round(float(parts[32]), 2)
                     except (ValueError, IndexError):
                         pass
         except Exception as e:
