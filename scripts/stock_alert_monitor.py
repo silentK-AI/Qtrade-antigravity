@@ -106,8 +106,10 @@ class StockAlertMonitor:
             # 盘中监控循环
             self._intraday_monitor()
 
-        if mode == "close":
-            self._load_history_data()
+        if mode in ("full", "close"):
+            if mode == "close":
+                self._load_history_data()
+            # 盘中结束后自动生成盘后回测报告
             self._close_report()
 
         logger.info("监控器退出。")
