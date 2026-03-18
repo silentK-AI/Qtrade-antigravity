@@ -67,7 +67,7 @@ class StockPricePredictor:
     """
 
     # 特征维度
-    N_FEATURES = 24
+    N_FEATURES = 26
 
     def __init__(self, model_dir: str = "models/stock"):
         self._model_dir = Path(model_dir)
@@ -79,15 +79,16 @@ class StockPricePredictor:
     # 公开接口
     # ------------------------------------------------------------------
 
-    def train_and_predict(self, symbol: str, name: str, hist_df: pd.DataFrame) -> Optional[StockPricePrediction]:
+    def train_and_predict(self, symbol: str, name: str, hist_df: pd.DataFrame, today_open: float = 0.0) -> Optional[StockPricePrediction]:
         """
         训练模型并立即预测（每次盘前调用，全量历史数据训练）
 
         Args:
-            symbol:  标的代码
-            name:    标的名称
-            hist_df: 历史 K 线 DataFrame，包含列 [date/日期, open/开盘, high/最高, low/最低, close/收盘, volume/成交量]
-                     至少 30 行，建议 252 行（1年）
+            symbol:     标的代码
+            name:       标的名称
+            hist_df:    历史 K 线 DataFrame，包含列 [date/日期, open/开盘, high/最高, low/最低, close/收盘, volume/成交量]
+                        至少 30 行，建议 252 行（1年）
+            today_open: 当天实际开盘价（9:25后获取），0表示用历史最后一行open
         Returns:
             StockPricePrediction 或 None
         """
@@ -100,7 +101,7 @@ class StockPricePredictor:
         if not ok:
             return None
 
-        return self._predict(symbol, name, df)
+        return self._predict(symbol, name, df, today_open=today_open)
 
     def has_model(self, symbol: str) -> bool:
         return symbol in self._models
@@ -217,6 +218,15 @@ class StockPricePredictor:
                 dow = _dt.now().weekday()
             feats.append(float(dow))
 
+            # ── 开盘价因子 (2) ── 仅预测时有效，训练时用历史开盘
+            # 开盘跳空幅度：(open - prev_close) / prev_close * 100
+            gap_pct = (o - pc) / pc * 100 if pc > 0 else 0.0
+            feats.append(gap_pct)
+            # 开盘价相对MA5偏离
+            ma5_val = float(np.mean(closes[-5:])) if len(closes) >= 5 else c
+            open_ma5_dev = (o / ma5_val - 1) * 100 if ma5_val > 0 else 0.0
+            feats.append(open_ma5_dev)
+
             assert len(feats) == self.N_FEATURES, f"特征数量异常: {len(feats)}"
             return np.array(feats, dtype=np.float64)
 
@@ -321,12 +331,18 @@ class StockPricePredictor:
     # 预测
     # ------------------------------------------------------------------
 
-    def _predict(self, symbol: str, name: str, df: pd.DataFrame) -> Optional[StockPricePrediction]:
+    def _predict(self, symbol: str, name: str, df: pd.DataFrame, today_open: float = 0.0) -> Optional[StockPricePrediction]:
         """使用已训练模型预测次日最高/最低价"""
         if symbol not in self._models:
             return None
 
         try:
+            # 若传入当天开盘价，覆盖 df 最后一行的 open
+            if today_open > 0:
+                df = df.copy()
+                df.iloc[-1, df.columns.get_loc("open")] = today_open
+                logger.debug(f"[{symbol}] 使用当日开盘价 {today_open:.3f} 预测")
+
             feat = self._build_features(df, len(df) - 1)
             if feat is None:
                 return None

@@ -289,13 +289,19 @@ class StockAlertMonitor:
             if klines is None:
                 continue
             try:
-                pred = self._predictor.train_and_predict(symbol, cfg["name"], klines)
+                # 获取当日实时开盘价（9:25后有效）
+                today_open = 0.0
+                q = quotes.get(symbol) if quotes else None
+                if q and hasattr(q, 'open') and q.open and q.open > 0:
+                    today_open = float(q.open)
+                pred = self._predictor.train_and_predict(symbol, cfg["name"], klines, today_open=today_open)
                 if pred:
                     self._predictions[symbol] = pred
                     logger.info(
                         f"  [{symbol} {cfg['name']}] 预测高={pred.pred_high:.3f} "
                         f"低={pred.pred_low:.3f} 波动={pred.pred_range_pct:.2f}% "
                         f"置信={pred.confidence:.2f}"
+                        + (f" 开盘={today_open:.3f}" if today_open > 0 else "")
                     )
             except Exception as e:
                 logger.warning(f"  [{symbol}] 预测失败: {e}")

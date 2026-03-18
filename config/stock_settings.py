@@ -33,7 +33,7 @@ STOCK_ALERT_SYMBOLS = {
     "159767": {"name": "电池龙头ETF", "type": "etf", "exchange": "SZ"},
 }
 
-ALERT_PREMARKET_TIME = "09:15"      # 盘前报告推送时间
+ALERT_PREMARKET_TIME = "09:25"      # 盘前报告推送时间（9:25开盘后获取开盘价）
 ALERT_CLOSE_TIME    = "15:05"      # 收盘报告推送时间
 ALERT_TRADE_AMOUNT  = 10000        # 模拟每笔操作金额（元）
 ALERT_SCAN_INTERVAL = 30            # 盘中扫描间隔（秒）
