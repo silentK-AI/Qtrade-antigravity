@@ -52,7 +52,7 @@ echo.
 REM === 3. 注册 Stock Scheduler 自启 ===
 echo [3/3] 注册 Stock Scheduler (个股技术分析调度器) 开机自启...
 schtasks /Create /TN "Quati-Stock-Scheduler" ^
-    /TR "cmd /c cd /d %PROJECT_DIR% && python scripts\stock_scheduler.py >> logs\stock_scheduler_schtask.log 2>&1" ^
+    /TR "wscript.exe %PROJECT_DIR%\deploy\start_stock_scheduler_bg.vbs" ^
     /SC ONSTART ^
     /DELAY 0001:00 ^
     /RL HIGHEST ^
