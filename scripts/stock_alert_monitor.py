@@ -108,7 +108,7 @@ class StockAlertMonitor:
             # 盘中监控循环
             self._intraday_monitor()
 
-        if mode in ("full", "close"):
+        if mode in ("full", "intraday", "close"):
             if mode == "close":
                 self._load_history_data()
             # 盘中结束后自动生成盘后回测报告
@@ -590,16 +590,16 @@ class StockAlertMonitor:
                 now = datetime.now()
                 current_time = now.strftime("%H:%M")
 
+                # 15:00 后直接退出进入盘后报告
+                if now.hour > 15 or (now.hour == 15 and now.minute >= 0):
+                    logger.info("A股收盘（15:00），监控结束，准备生成盘后报告")
+                    break
+
                 # 判断是否在交易时间内
                 a_share_active = self._is_a_share_trading_time(now)
-                hk_active = self._is_hk_trading_time(now)
 
-                if not a_share_active and not hk_active:
-                    # A 股 15:00 收盘后直接退出，不等港股
-                    if now.hour >= 15:
-                        logger.info("A股收盘（15:00），监控结束")
-                        break
-                    elif now.hour < 9 or (now.hour == 9 and now.minute < 30):
+                if not a_share_active:
+                    if now.hour < 9 or (now.hour == 9 and now.minute < 30):
                         logger.debug("等待开盘...")
                         time.sleep(30)
                         continue
@@ -609,9 +609,8 @@ class StockAlertMonitor:
                         time.sleep(30)
                         continue
 
-                # 确定本轮需要扫描的标的（只扫A股）
+                # 只扫A股
                 scan_symbols = self._get_active_symbols(a_share_active, False)
-
                 if scan_symbols:
                     self._scan_cycle(scan_symbols)
 
@@ -619,6 +618,7 @@ class StockAlertMonitor:
 
         except KeyboardInterrupt:
             logger.info("收到退出信号，监控器停止")
+            return  # 手动中断时不运行盘后报告
 
     def _scan_cycle(self, symbols: list[str]):
         """单次扫描周期"""
