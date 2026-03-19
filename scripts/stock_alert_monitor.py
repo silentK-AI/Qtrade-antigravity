@@ -284,7 +284,18 @@ class StockAlertMonitor:
         """生成并推送盘前技术分析报告"""
         logger.info("=== 生成盘前技术分析报告 ===")
 
-        # 获取实时行情（盘前竞价阶段可获取昨收等）
+        # ── 等待到 9:25（开盘后才能拿到实时开盘价）──
+        from config.stock_settings import ALERT_PREMARKET_TIME
+        target_h, target_m = map(int, ALERT_PREMARKET_TIME.split(":"))
+        while True:
+            now = datetime.now()
+            if now.hour > target_h or (now.hour == target_h and now.minute >= target_m):
+                break
+            wait_sec = (target_h * 60 + target_m - now.hour * 60 - now.minute) * 60 - now.second
+            logger.info(f"等待盘前报告时间 {ALERT_PREMARKET_TIME}，还需 {wait_sec} 秒...")
+            time.sleep(min(wait_sec, 30))
+
+        # 获取实时行情（9:25后拿到开盘价）
         quotes = self._data_service.fetch_realtime_quotes()
 
         # 获取市场情绪
