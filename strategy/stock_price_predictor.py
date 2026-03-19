@@ -452,6 +452,22 @@ class StockPricePredictor:
             if pred_high < pred_low:
                 pred_high, pred_low = pred_low, pred_high
 
+            # ── 开盘价约束：预测高低点必须包含开盘价 ──
+            # 若传入了当天实际开盘价，强制 low <= open <= high
+            if today_open > 0:
+                if pred_low > today_open:
+                    # 预测低点比开盘价还高，不合理，拉低到开盘价以下
+                    gap = pred_high - pred_low  # 保持振幅不变
+                    pred_low  = round(today_open * 0.998, 3)
+                    pred_high = round(pred_low + gap, 3)
+                    logger.debug(f"[{symbol}] 预测低点高于开盘价，已修正: 低={pred_low:.3f} 高={pred_high:.3f}")
+                if pred_high < today_open:
+                    # 预测高点比开盘价还低，不合理，拉高到开盘价以上
+                    gap = pred_high - pred_low
+                    pred_high = round(today_open * 1.002, 3)
+                    pred_low  = round(pred_high - gap, 3)
+                    logger.debug(f"[{symbol}] 预测高点低于开盘价，已修正: 低={pred_low:.3f} 高={pred_high:.3f}")
+
             logger.debug(
                 f"[{symbol}] 预测: 高={pred_high:.3f} 低={pred_low:.3f} "
                 f"波动={pred_range:.2f}% 方向={pred_dir:+.2f}% MAE={mae_pct:.3f}%"
