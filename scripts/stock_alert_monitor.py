@@ -97,12 +97,14 @@ class StockAlertMonitor:
         if mode in ("full", "premarket"):
             # 拉取历史 K 线
             self._load_history_data()
-            # 盘前报告
+            # 盘前报告（含等待9:25+预测）
             self._premarket_report()
 
         if mode in ("full", "intraday"):
             if mode == "intraday":
+                # intraday模式：拉取K线+立即预测（不等待9:25，不推送报告）
                 self._load_history_data()
+                self._run_predictions_silent()
             # 盘中监控循环
             self._intraday_monitor()
 
@@ -279,6 +281,50 @@ class StockAlertMonitor:
         lines.append("---\n")
         lines.append(f"**合计** 不动：{total_static:+.2f} 元 ｜ 操作：{total_op:+.2f} 元 ｜ 超额：{op_advantage:+.2f} 元")
         return "\n".join(lines)
+
+    def _run_predictions_silent(self):
+        """静默运行预测（intraday模式用，不推送报告，直接用实时开盘价训练预测）"""
+        logger.info("=== 静默预测（intraday模式）===")
+        quotes = self._data_service.fetch_realtime_quotes()
+        sentiment = self._data_service.fetch_market_sentiment()
+        self._predictions.clear()
+        self._pred_hit_notified.clear()
+        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+            klines = self._klines_cache.get(symbol)
+            if klines is None:
+                continue
+            try:
+                today_open = 0.0
+                q = quotes.get(symbol) if quotes else None
+                if q and hasattr(q, 'open') and q.open and q.open > 0:
+                    today_open = float(q.open)
+                market_chg = sentiment.sh_change_pct if sentiment else 0.0
+                auction_vol_ratio = 0.0
+                if q and q.volume > 0 and klines is not None and len(klines) >= 20:
+                    try:
+                        norm = self._predictor._normalize_df(klines)
+                        if norm is not None and len(norm) >= 20:
+                            avg_vol = float(norm["volume"].iloc[-20:].mean())
+                            if avg_vol > 0:
+                                auction_vol_ratio = round(q.volume / avg_vol, 2)
+                    except Exception:
+                        pass
+                pred = self._predictor.train_and_predict(
+                    symbol, cfg["name"], klines,
+                    today_open=today_open,
+                    market_change_pct=market_chg,
+                    auction_vol_ratio=auction_vol_ratio,
+                )
+                if pred:
+                    self._predictions[symbol] = pred
+                    logger.info(
+                        f"  [{symbol} {cfg['name']}] 预测高={pred.pred_high:.3f} "
+                        f"低={pred.pred_low:.3f}"
+                        + (f" 开盘={today_open:.3f}" if today_open > 0 else "")
+                    )
+            except Exception as e:
+                logger.warning(f"  [{symbol}] 预测失败: {e}")
+        logger.info(f"静默预测完成: {len(self._predictions)}/{len(STOCK_ALERT_SYMBOLS)} 只")
 
     def _premarket_report(self):
         """生成并推送盘前技术分析报告"""
