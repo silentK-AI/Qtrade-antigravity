@@ -283,44 +283,43 @@ class StockPricePredictor:
     # ------------------------------------------------------------------
 
     def _train(self, symbol: str, df: pd.DataFrame) -> bool:
-        """训练波动率模型和方向模型"""
+        """训练高点模型和低点模型（目标：相对次日开盘价的涨跌幅）"""
         try:
             from xgboost import XGBRegressor
             from sklearn.metrics import r2_score
             import warnings
             warnings.filterwarnings("ignore")
 
-            X_list, y_range_list, y_dir_list = [], [], []
+            X_list, y_high_list, y_low_list = [], [], []
 
             for i in range(25, len(df) - 1):
                 feat = self._build_features(df, i)
                 if feat is None:
                     continue
 
-                c_now  = float(df.iloc[i]["close"])
+                o_next = float(df.iloc[i+1]["open"])
                 h_next = float(df.iloc[i+1]["high"])
                 l_next = float(df.iloc[i+1]["low"])
-                c_next = float(df.iloc[i+1]["close"])
 
-                if c_now <= 0:
+                if o_next <= 0:
                     continue
 
-                # 目标1: 次日波动率 (高低差 / 前收)
-                y_range = (h_next - l_next) / c_now * 100
-                # 目标2: 次日方向 (收盘涨跌幅)
-                y_dir   = (c_next - c_now) / c_now * 100
+                # 目标1: 次日开盘到最高的涨幅（%），天然 >= 0
+                y_high = (h_next - o_next) / o_next * 100
+                # 目标2: 次日开盘到最低的跌幅（%），天然 >= 0
+                y_low  = (o_next - l_next) / o_next * 100
 
                 X_list.append(feat)
-                y_range_list.append(y_range)
-                y_dir_list.append(y_dir)
+                y_high_list.append(y_high)
+                y_low_list.append(y_low)
 
             if len(X_list) < 20:
                 logger.warning(f"[{symbol}] 有效训练样本仅 {len(X_list)} 条，不足 20")
                 return False
 
-            X       = np.array(X_list)
-            y_range = np.array(y_range_list)
-            y_dir   = np.array(y_dir_list)
+            X      = np.array(X_list)
+            y_high = np.array(y_high_list)
+            y_low  = np.array(y_low_list)
 
             params = dict(
                 n_estimators=300,
@@ -336,34 +335,33 @@ class StockPricePredictor:
                 verbosity=0,
             )
 
-            # 波动率模型
-            range_model = XGBRegressor(**params)
-            range_model.fit(X, y_range)
+            # 高点模型：预测开盘到最高的涨幅
+            high_model = XGBRegressor(**params)
+            high_model.fit(X, y_high)
 
-            # 方向模型
-            dir_model = XGBRegressor(**params)
-            dir_model.fit(X, y_dir)
+            # 低点模型：预测开盘到最低的跌幅
+            low_model = XGBRegressor(**params)
+            low_model.fit(X, y_low)
 
             # 验证（最后 20% 数据）
             split = max(1, int(len(X) * 0.8))
             X_val = X[split:]
             r2 = 0.5
-            mae_pct = 999.0  # 平均误差百分比
+            mae_pct = 999.0
             if len(X_val) > 3:
                 from sklearn.metrics import r2_score, mean_absolute_error
-                r2_range = r2_score(y_range[split:], range_model.predict(X_val))
-                r2_dir   = r2_score(y_dir[split:],   dir_model.predict(X_val))
-                r2 = max(0.0, (r2_range + r2_dir) / 2)
-                # 用高低价 MAE% 作为误差指标（更直观）
-                mae_range = mean_absolute_error(y_range[split:], range_model.predict(X_val))
-                mae_dir   = mean_absolute_error(y_dir[split:],   dir_model.predict(X_val))
-                mae_pct   = round((mae_range + mae_dir) / 2, 3)  # 平均绝对误差 %
+                r2_high = r2_score(y_high[split:], high_model.predict(X_val))
+                r2_low  = r2_score(y_low[split:],  low_model.predict(X_val))
+                r2 = max(0.0, (r2_high + r2_low) / 2)
+                mae_high = mean_absolute_error(y_high[split:], high_model.predict(X_val))
+                mae_low  = mean_absolute_error(y_low[split:],  low_model.predict(X_val))
+                mae_pct  = round((mae_high + mae_low) / 2, 3)
                 logger.debug(
-                    f"[{symbol}] 波动率 R²={r2_range:.3f} 方向 R²={r2_dir:.3f} "
+                    f"[{symbol}] 高点 R²={r2_high:.3f} 低点 R²={r2_low:.3f} "
                     f"MAE={mae_pct:.3f}% 样本={len(X)}"
                 )
 
-            self._models[symbol] = (range_model, dir_model, r2, len(X), mae_pct)
+            self._models[symbol] = (high_model, low_model, r2, len(X), mae_pct)
             logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f} MAE={mae_pct:.3f}%")
 
             # ── Feature Importance Top10 ──
@@ -380,11 +378,11 @@ class StockPricePredictor:
                     "开盘跳空","开盘vsMA5",
                     "大盘涨跌","竞价量比",
                 ]
-                imp_range = range_model.feature_importances_
-                imp_dir   = dir_model.feature_importances_
-                imp_avg   = (imp_range + imp_dir) / 2
-                top_idx   = np.argsort(imp_avg)[::-1][:10]
-                top_str   = ", ".join(
+                imp_high = high_model.feature_importances_
+                imp_low  = low_model.feature_importances_
+                imp_avg  = (imp_high + imp_low) / 2
+                top_idx  = np.argsort(imp_avg)[::-1][:10]
+                top_str  = ", ".join(
                     f"{feat_names[i] if i < len(feat_names) else f'f{i}'}={imp_avg[i]:.3f}"
                     for i in top_idx
                 )
@@ -433,44 +431,25 @@ class StockPricePredictor:
             range_model, dir_model, r2, n_samples, mae_pct = self._models[symbol]
             X = feat.reshape(1, -1)
 
-            pred_range = float(range_model.predict(X)[0])  # 预测波动率 %
-            pred_dir   = float(dir_model.predict(X)[0])    # 预测方向 %
+            pred_high_pct = float(range_model.predict(X)[0])  # 开盘到最高的涨幅 %
+            pred_low_pct  = float(dir_model.predict(X)[0])    # 开盘到最低的跌幅 %
 
-            # 确保波动率为正
-            pred_range = max(0.5, abs(pred_range))
+            # 确保均为正数
+            pred_high_pct = max(0.1, abs(pred_high_pct))
+            pred_low_pct  = max(0.1, abs(pred_low_pct))
 
-            last_close = float(df.iloc[-1]["close"])
-            if last_close <= 0:
+            # 用当天开盘价还原，天然保证 pred_low <= today_open <= pred_high
+            anchor = today_open if today_open > 0 else float(df.iloc[-1]["close"])
+            if anchor <= 0:
                 return None
 
-            # 最高价 = 前收 * (1 + (方向 + 波动/2) / 100)
-            # 最低价 = 前收 * (1 + (方向 - 波动/2) / 100)
-            pred_high = round(last_close * (1 + (pred_dir + pred_range / 2) / 100), 3)
-            pred_low  = round(last_close * (1 + (pred_dir - pred_range / 2) / 100), 3)
-
-            # 保证 high >= low
-            if pred_high < pred_low:
-                pred_high, pred_low = pred_low, pred_high
-
-            # ── 开盘价约束：预测高低点必须包含开盘价 ──
-            # 若传入了当天实际开盘价，强制 low <= open <= high
-            if today_open > 0:
-                if pred_low > today_open:
-                    # 预测低点比开盘价还高，不合理，拉低到开盘价以下
-                    gap = pred_high - pred_low  # 保持振幅不变
-                    pred_low  = round(today_open * 0.998, 3)
-                    pred_high = round(pred_low + gap, 3)
-                    logger.debug(f"[{symbol}] 预测低点高于开盘价，已修正: 低={pred_low:.3f} 高={pred_high:.3f}")
-                if pred_high < today_open:
-                    # 预测高点比开盘价还低，不合理，拉高到开盘价以上
-                    gap = pred_high - pred_low
-                    pred_high = round(today_open * 1.002, 3)
-                    pred_low  = round(pred_high - gap, 3)
-                    logger.debug(f"[{symbol}] 预测高点低于开盘价，已修正: 低={pred_low:.3f} 高={pred_high:.3f}")
+            pred_high = round(anchor * (1 + pred_high_pct / 100), 3)
+            pred_low  = round(anchor * (1 - pred_low_pct  / 100), 3)
+            pred_range_pct = round(pred_high_pct + pred_low_pct, 2)  # 总振幅%
 
             logger.debug(
-                f"[{symbol}] 预测: 高={pred_high:.3f} 低={pred_low:.3f} "
-                f"波动={pred_range:.2f}% 方向={pred_dir:+.2f}% MAE={mae_pct:.3f}%"
+                f"[{symbol}] 预测: 高={pred_high:.3f}(+{pred_high_pct:.2f}%) "
+                f"低={pred_low:.3f}(-{pred_low_pct:.2f}%) 锚点={anchor:.3f} MAE={mae_pct:.3f}%"
             )
 
             return StockPricePrediction(
@@ -478,9 +457,9 @@ class StockPricePredictor:
                 name=name,
                 pred_high=pred_high,
                 pred_low=pred_low,
-                pred_range_pct=round(pred_range, 2),
-                confidence=round(r2, 3),  # R² 置信度
-                last_close=last_close,
+                pred_range_pct=pred_range_pct,
+                confidence=round(r2, 3),
+                last_close=float(df.iloc[-1]["close"]),
                 model_samples=n_samples,
             )
 
