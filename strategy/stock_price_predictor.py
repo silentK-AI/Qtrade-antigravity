@@ -13,11 +13,11 @@
   - 技术指标: RSI14、KDJ(K/D/J)、MACD、布林带宽度
   - 日历特征: 星期几
 
-预测目标:
-  - 次日波动率 = (最高价 - 最低价) / 前收 * 100 (以前收为基准)
-  - 次日方向 = (次日收盘 - 前收) / 前收 * 100
-  - 最终输出: predicted_high = 前收 * (1 + (方向 + 波动/2)/100)
-             predicted_low  = 前收 * (1 + (方向 - 波动/2)/100)
+预测目标（混合方案）:
+  - 基底: ATR10 (近10日平均真实波幅)
+  - ML目标: 调节系数 = 实际振幅 / ATR10 (通常在 0.3~2.5 之间)
+  - 最终输出: predicted_high = 开盘价 × (1 + ATR10_pct × clamp(ML系数, 0.5, 2.0))
+             predicted_low  = 开盘价 × (1 - ATR10_pct × clamp(ML系数, 0.5, 2.0))
 """
 from __future__ import annotations
 
@@ -283,14 +283,14 @@ class StockPricePredictor:
     # ------------------------------------------------------------------
 
     def _train(self, symbol: str, df: pd.DataFrame) -> bool:
-        """训练高点模型和低点模型（目标：相对次日开盘价的涨跌幅）"""
+        """训练波动率调节系数模型（目标：实际振幅 / ATR10 的比率）"""
         try:
             from xgboost import XGBRegressor
-            from sklearn.metrics import r2_score
+            from sklearn.metrics import r2_score, mean_absolute_error
             import warnings
             warnings.filterwarnings("ignore")
 
-            X_list, y_high_list, y_low_list = [], [], []
+            X_list, y_high_ratio_list, y_low_ratio_list = [], [], []
 
             for i in range(25, len(df) - 1):
                 feat = self._build_features(df, i)
@@ -304,44 +304,51 @@ class StockPricePredictor:
                 if o_next <= 0:
                     continue
 
-                # 目标1: 次日开盘到最高的涨幅（%），天然 >= 0
-                y_high = (h_next - o_next) / o_next * 100
-                # 目标2: 次日开盘到最低的跌幅（%），天然 >= 0
-                y_low  = (o_next - l_next) / o_next * 100
+                # 计算当前样本的 ATR10 (基于 i 时刻的历史数据)
+                atr10_pct = self._calc_atr_pct(df, i, period=10)
+                if atr10_pct <= 0.01:  # 极端低波动，跳过
+                    continue
+
+                # 实际振幅占 ATR10 的比例（调节系数）
+                actual_high_pct = (h_next - o_next) / o_next * 100
+                actual_low_pct  = (o_next - l_next) / o_next * 100
+
+                y_high_ratio = max(0.0, actual_high_pct) / atr10_pct
+                y_low_ratio  = max(0.0, actual_low_pct)  / atr10_pct
 
                 X_list.append(feat)
-                y_high_list.append(y_high)
-                y_low_list.append(y_low)
+                y_high_ratio_list.append(y_high_ratio)
+                y_low_ratio_list.append(y_low_ratio)
 
             if len(X_list) < 20:
                 logger.warning(f"[{symbol}] 有效训练样本仅 {len(X_list)} 条，不足 20")
                 return False
 
-            X      = np.array(X_list)
-            y_high = np.array(y_high_list)
-            y_low  = np.array(y_low_list)
+            X        = np.array(X_list)
+            y_high_r = np.array(y_high_ratio_list)
+            y_low_r  = np.array(y_low_ratio_list)
 
             params = dict(
-                n_estimators=300,
-                max_depth=5,
-                learning_rate=0.03,
+                n_estimators=150,
+                max_depth=3,
+                learning_rate=0.05,
                 subsample=0.8,
                 colsample_bytree=0.7,
-                min_child_weight=3,
-                reg_alpha=0.1,
-                reg_lambda=1.5,
+                min_child_weight=8,
+                reg_alpha=0.3,
+                reg_lambda=3.0,
                 random_state=42,
                 n_jobs=-1,
                 verbosity=0,
             )
 
-            # 高点模型：预测开盘到最高的涨幅
+            # 高点调节系数模型
             high_model = XGBRegressor(**params)
-            high_model.fit(X, y_high)
+            high_model.fit(X, y_high_r)
 
-            # 低点模型：预测开盘到最低的跌幅
+            # 低点调节系数模型
             low_model = XGBRegressor(**params)
-            low_model.fit(X, y_low)
+            low_model.fit(X, y_low_r)
 
             # 验证（最后 20% 数据）
             split = max(1, int(len(X) * 0.8))
@@ -349,20 +356,19 @@ class StockPricePredictor:
             r2 = 0.5
             mae_pct = 999.0
             if len(X_val) > 3:
-                from sklearn.metrics import r2_score, mean_absolute_error
-                r2_high = r2_score(y_high[split:], high_model.predict(X_val))
-                r2_low  = r2_score(y_low[split:],  low_model.predict(X_val))
+                r2_high = r2_score(y_high_r[split:], high_model.predict(X_val))
+                r2_low  = r2_score(y_low_r[split:],  low_model.predict(X_val))
                 r2 = max(0.0, (r2_high + r2_low) / 2)
-                mae_high = mean_absolute_error(y_high[split:], high_model.predict(X_val))
-                mae_low  = mean_absolute_error(y_low[split:],  low_model.predict(X_val))
+                mae_high = mean_absolute_error(y_high_r[split:], high_model.predict(X_val))
+                mae_low  = mean_absolute_error(y_low_r[split:],  low_model.predict(X_val))
                 mae_pct  = round((mae_high + mae_low) / 2, 3)
                 logger.debug(
-                    f"[{symbol}] 高点 R²={r2_high:.3f} 低点 R²={r2_low:.3f} "
-                    f"MAE={mae_pct:.3f}% 样本={len(X)}"
+                    f"[{symbol}] 高点系数 R²={r2_high:.3f} 低点系数 R²={r2_low:.3f} "
+                    f"MAE={mae_pct:.3f} 样本={len(X)}"
                 )
 
             self._models[symbol] = (high_model, low_model, r2, len(X), mae_pct)
-            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f} MAE={mae_pct:.3f}%")
+            logger.info(f"[{symbol}] 预测模型训练完成 样本={len(X)} R²={r2:.3f} MAE={mae_pct:.3f}")
 
             # ── Feature Importance Top10 ──
             try:
@@ -403,7 +409,7 @@ class StockPricePredictor:
                  today_open: float = 0.0,
                  market_change_pct: float = 0.0,
                  auction_vol_ratio: float = 0.0) -> Optional[StockPricePrediction]:
-        """使用已训练模型预测次日最高/最低价"""
+        """使用 ATR 基底 + ML 调节系数预测次日最高/最低价"""
         if symbol not in self._models:
             return None
 
@@ -425,31 +431,40 @@ class StockPricePredictor:
                 feat[-1] = auction_vol_ratio
             if market_change_pct != 0.0 or auction_vol_ratio != 0.0:
                 logger.debug(f"[{symbol}] 大盘={market_change_pct:+.2f}% 竞价量比={auction_vol_ratio:.2f}")
-            if feat is None:
-                return None
 
-            range_model, dir_model, r2, n_samples, mae_pct = self._models[symbol]
+            range_model, dir_model, r2, n_samples, mae_ratio = self._models[symbol]
             X = feat.reshape(1, -1)
 
-            pred_high_pct = float(range_model.predict(X)[0])  # 开盘到最高的涨幅 %
-            pred_low_pct  = float(dir_model.predict(X)[0])    # 开盘到最低的跌幅 %
+            # ML 输出的是调节系数（相对于 ATR10 的倍率）
+            ml_high_ratio = float(range_model.predict(X)[0])
+            ml_low_ratio  = float(dir_model.predict(X)[0])
 
-            # 确保均为正数
-            pred_high_pct = max(0.1, abs(pred_high_pct))
-            pred_low_pct  = max(0.1, abs(pred_low_pct))
+            # Clamp 到 [0.3, 2.5] 范围，防止极端预测
+            ml_high_ratio = max(0.3, min(2.5, ml_high_ratio))
+            ml_low_ratio  = max(0.3, min(2.5, ml_low_ratio))
 
-            # 用当天开盘价还原，天然保证 pred_low <= today_open <= pred_high
+            # 计算当前 ATR10 百分比
+            atr10_pct = self._calc_atr_pct(df, len(df) - 1, period=10)
+            if atr10_pct <= 0.01:
+                atr10_pct = 1.0  # fallback: 1% 默认振幅
+
+            # 最终预测: ATR 基底 × ML 调节系数
+            pred_high_pct = atr10_pct * ml_high_ratio
+            pred_low_pct  = atr10_pct * ml_low_ratio
+
+            # 用当天开盘价还原
             anchor = today_open if today_open > 0 else float(df.iloc[-1]["close"])
             if anchor <= 0:
                 return None
 
             pred_high = round(anchor * (1 + pred_high_pct / 100), 3)
             pred_low  = round(anchor * (1 - pred_low_pct  / 100), 3)
-            pred_range_pct = round(pred_high_pct + pred_low_pct, 2)  # 总振幅%
+            pred_range_pct = round(pred_high_pct + pred_low_pct, 2)
 
             logger.debug(
                 f"[{symbol}] 预测: 高={pred_high:.3f}(+{pred_high_pct:.2f}%) "
-                f"低={pred_low:.3f}(-{pred_low_pct:.2f}%) 锚点={anchor:.3f} MAE={mae_pct:.3f}%"
+                f"低={pred_low:.3f}(-{pred_low_pct:.2f}%) 锚点={anchor:.3f} "
+                f"ATR10={atr10_pct:.2f}% 高系数={ml_high_ratio:.2f} 低系数={ml_low_ratio:.2f}"
             )
 
             return StockPricePrediction(
@@ -502,4 +517,35 @@ class StockPricePredictor:
         if avg_l == 0:
             return 100.0
         return 100.0 - 100.0 / (1.0 + avg_g / avg_l)
- 
+
+    @staticmethod
+    def _calc_atr_pct(df: pd.DataFrame, idx: int, period: int = 10) -> float:
+        """
+        计算截至 idx 时刻的 ATR(period) 占收盘价的百分比。
+        返回值如 1.5 表示近 period 日平均真实波幅为收盘价的 1.5%。
+        """
+        if idx < period:
+            return 0.0
+        try:
+            highs  = df["high"].values.astype(float)
+            lows   = df["low"].values.astype(float)
+            closes = df["close"].values.astype(float)
+
+            tr_list = []
+            for j in range(idx - period + 1, idx + 1):
+                if j < 1:
+                    continue
+                tr = max(
+                    highs[j] - lows[j],
+                    abs(highs[j] - closes[j - 1]),
+                    abs(lows[j]  - closes[j - 1]),
+                )
+                tr_list.append(tr)
+
+            if not tr_list or closes[idx] <= 0:
+                return 0.0
+
+            atr = float(np.mean(tr_list))
+            return atr / closes[idx] * 100
+        except Exception:
+            return 0.0

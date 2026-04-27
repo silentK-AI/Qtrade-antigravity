@@ -47,6 +47,7 @@ from config.stock_settings import (
 from data.stock_data_service import StockDataService, MarketSentiment
 from strategy.technical_analyzer import TechnicalAnalyzer, TechnicalReport, AlertSignal
 from strategy.stock_price_predictor import StockPricePredictor, StockPricePrediction
+from strategy.llm_fundamental_analyzer import LLMFundamentalAnalyzer
 from monitor.notifier import Notifier
 
 
@@ -62,6 +63,7 @@ class StockAlertMonitor:
         self._analyzer = TechnicalAnalyzer()
         self._notifier = Notifier()
         self._predictor = StockPricePredictor(model_dir="models/stock")
+        self._llm_analyzer = LLMFundamentalAnalyzer()
 
         # 历史 K 线缓存: {symbol: DataFrame}
         self._klines_cache: dict = {}
@@ -347,62 +349,71 @@ class StockAlertMonitor:
         # 获取市场情绪
         sentiment = self._data_service.fetch_market_sentiment()
 
-        # ── XGBoost 次日价格预测（训练 + 预测，一次性完成）──
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # ── XGBoost 次日价格预测（多线程并行）──
         logger.info("=== XGBoost 次日价格预测 ===")
         self._predictions.clear()
         self._pred_hit_notified.clear()
-        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+
+        def _predict_single(symbol, cfg):
             klines = self._klines_cache.get(symbol)
             if klines is None:
-                continue
+                return symbol, None, "无历史 K 线"
+            
+            today_open = 0.0
+            q = quotes.get(symbol) if quotes else None
+            if q and hasattr(q, 'open') and q.open and q.open > 0:
+                today_open = float(q.open)
+
+            market_chg = sentiment.sh_change_pct if sentiment else 0.0
+            auction_vol_ratio = 0.0
+            if q and q.volume > 0 and klines is not None and len(klines) >= 20:
+                try:
+                    norm = self._predictor._normalize_df(klines)
+                    if norm is not None and len(norm) >= 20:
+                        avg_vol = float(norm["volume"].iloc[-20:].mean())
+                        if avg_vol > 0:
+                            auction_vol_ratio = round(q.volume / avg_vol, 2)
+                except Exception:
+                    pass
+
             try:
-                # 获取当日实时开盘价（9:25后有效）
-                today_open = 0.0
-                q = quotes.get(symbol) if quotes else None
-                if q and hasattr(q, 'open') and q.open and q.open > 0:
-                    today_open = float(q.open)
-
-                # 大盘涨跌幅（上证）
-                market_chg = sentiment.sh_change_pct if sentiment else 0.0
-
-                # 竞价量比：竞价成交量 / 历史20日均量
-                auction_vol_ratio = 0.0
-                if q and q.volume > 0 and klines is not None and len(klines) >= 20:
-                    try:
-                        norm = self._predictor._normalize_df(klines)
-                        if norm is not None and len(norm) >= 20:
-                            avg_vol = float(norm["volume"].iloc[-20:].mean())
-                            if avg_vol > 0:
-                                auction_vol_ratio = round(q.volume / avg_vol, 2)
-                    except Exception:
-                        pass
-
                 pred = self._predictor.train_and_predict(
                     symbol, cfg["name"], klines,
                     today_open=today_open,
                     market_change_pct=market_chg,
                     auction_vol_ratio=auction_vol_ratio,
                 )
-                if pred:
-                    self._predictions[symbol] = pred
+                return symbol, pred, ""
+            except Exception as e:
+                return symbol, None, str(e)
+
+        with ThreadPoolExecutor(max_workers=min(4, len(STOCK_ALERT_SYMBOLS))) as executor:
+            futures = {executor.submit(_predict_single, sym, cfg): sym for sym, cfg in STOCK_ALERT_SYMBOLS.items()}
+            for future in as_completed(futures):
+                sym = futures[future]
+                symbol, pred, err = future.result()
+                if err:
+                    logger.warning(f"  [{sym}] 预测失败/跳过: {err}")
+                elif pred:
+                    self._predictions[sym] = pred
+                    cfg = STOCK_ALERT_SYMBOLS[sym]
+                    # 由于是多线程，打印日志时一并显示
                     logger.info(
-                        f"  [{symbol} {cfg['name']}] 预测高={pred.pred_high:.3f} "
+                        f"  [{sym} {cfg['name']}] 预测高={pred.pred_high:.3f} "
                         f"低={pred.pred_low:.3f} 波动={pred.pred_range_pct:.2f}% "
                         f"置信={pred.confidence:.2f}"
-                        + (f" 开盘={today_open:.3f}" if today_open > 0 else "")
-                        + (f" 大盘={market_chg:+.2f}%" if market_chg != 0 else "")
-                        + (f" 量比={auction_vol_ratio:.2f}" if auction_vol_ratio > 0 else "")
                     )
-            except Exception as e:
-                logger.warning(f"  [{symbol}] 预测失败: {e}")
 
-        # 生成每个标的的技术报告
+        # 生成每个标的的技术报告及LLM分析（多线程通信并行）
+        logger.info("=== 生成技术报告及大模型分析 ===")
         reports = []
-        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
+
+        def _analyze_and_llm(symbol, cfg):
             klines = self._klines_cache.get(symbol)
             if klines is None:
-                logger.warning(f"[{symbol}] 无历史 K 线，跳过")
-                continue
+                return symbol, None, "无历史 K 线，跳过"
 
             quote = quotes.get(symbol)
             current_price = quote.price if quote and quote.is_valid else 0.0
@@ -419,156 +430,168 @@ class StockAlertMonitor:
             )
 
             if report:
-                # 注入实时行情的当日高低价（盘中数据比K线末行更准确）
                 if quote and quote.is_valid:
                     if quote.high > 0:
                         report.day_high = round(quote.high, 3)
                     if quote.low > 0:
                         report.day_low = round(quote.low, 3)
-                # 注入 XGBoost 预测结果
                 pred = self._predictions.get(symbol)
                 if pred:
                     report.pred_high = pred.pred_high
                     report.pred_low = pred.pred_low
                     report.pred_range_pct = pred.pred_range_pct
                     report.pred_confidence = pred.confidence
-                reports.append(report)
-                self._prev_reports[symbol] = report
+                
+                try:
+                    report.llm_fundamental_analysis = self._llm_analyzer.generate_analysis(report)
+                except Exception as e:
+                    logger.warning(f"[{symbol}] 大模型基本面分析失败: {e}")
+
+            return symbol, report, ""
+
+        with ThreadPoolExecutor(max_workers=min(10, len(STOCK_ALERT_SYMBOLS))) as executor:
+            future_to_symbol = {executor.submit(_analyze_and_llm, sym, cfg): sym for sym, cfg in STOCK_ALERT_SYMBOLS.items()}
+            for future in as_completed(future_to_symbol):
+                sym = future_to_symbol[future]
+                symbol, report, err_msg = future.result()
+                if err_msg:
+                    logger.warning(f"[{sym}] {err_msg}")
+                elif report:
+                    reports.append(report)
+                    self._prev_reports[sym] = report
 
         if not reports:
             logger.warning("未生成任何技术报告")
             return
 
-        # 组装完整报告
-        content = self._format_premarket_content(reports, sentiment)
-
-        # 推送
-        logger.info(f"推送盘前报告 ({len(reports)} 只标的)")
-        self._notifier.notify_premarket_report(content)
-        logger.info("盘前报告推送完成 ✓")
-
-    def _format_premarket_content(
-        self, reports: list[TechnicalReport], sentiment: MarketSentiment
-    ) -> str:
-        """组装盘前报告完整内容"""
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        sections = [f"# 📊 盘前技术分析报告\n> {date_str}\n"]
-
         def is_etf(symbol: str) -> bool:
             return symbol.startswith(("1", "5"))
 
-        # 股票在前，ETF 在后；同类按评分降序
-        stocks  = sorted([r for r in reports if not is_etf(r.symbol)], key=lambda r: r.score, reverse=True)
-        etfs    = sorted([r for r in reports if     is_etf(r.symbol)], key=lambda r: r.score, reverse=True)
-        ordered = stocks + etfs
+        stock_reports = [r for r in reports if not is_etf(r.symbol)]
+        etf_reports = [r for r in reports if is_etf(r.symbol)]
 
-        # ── 一、恐慌 / 情绪指数 ──
-        fear_lines = []
+        # 推送股票部分
+        if stock_reports:
+            logger.info(f"推送股票盘前报告 ({len(stock_reports)} 只标的)")
+            stock_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True)
+            self._notifier.notify_premarket_report(stock_content, is_stock=True)
+            
+        # 推送 ETF 部分
+        if etf_reports:
+            logger.info(f"推送ETF盘前报告 ({len(etf_reports)} 只标的)")
+            etf_content = self._format_premarket_content(etf_reports, sentiment, is_stock=False)
+            self._notifier.notify_premarket_report(etf_content, is_stock=False)
 
-        # VIX
-        if sentiment.vix > 0:
-            if sentiment.vix >= 40:
-                vix_status = "🔴 极端恐慌"
-            elif sentiment.vix >= 30:
-                vix_status = "🟠 市场紧张"
+        logger.info("盘前报告推送完成 ✓")
+
+    def _format_premarket_content(
+        self, reports: list[TechnicalReport], sentiment: MarketSentiment, is_stock: bool
+    ) -> str:
+        """组装盘前报告完整内容"""
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        title_type = "股票" if is_stock else "ETF"
+        sections = [f"# 📊 {title_type}盘前技术分析\n> {date_str}\n"]
+
+        # 按评分降序
+        ordered = sorted(reports, key=lambda r: r.score, reverse=True)
+
+        # ── 一、恐慌 / 情绪指数 (为了防冗余，只有在发股票时带上市场环境) ──
+        if is_stock:
+            fear_lines = []
+
+            # VIX
+            if sentiment.vix > 0:
+                if sentiment.vix >= 40:
+                    vix_status = "🔴 极端恐慌"
+                elif sentiment.vix >= 30:
+                    vix_status = "🟠 市场紧张"
+                else:
+                    vix_status = "🟢 常态"
+                vix_chg = f" ({sentiment.vix_change_pct:+.1f}%)" if sentiment.vix_change_pct != 0 else ""
+                fear_lines.append(f"  VIX 恐慌指数: **{sentiment.vix:.2f}**{vix_chg} {vix_status}")
             else:
-                vix_status = "🟢 常态"
-            vix_chg = f" ({sentiment.vix_change_pct:+.1f}%)" if sentiment.vix_change_pct != 0 else ""
-            fear_lines.append(f"  VIX 恐慌指数: **{sentiment.vix:.2f}**{vix_chg} {vix_status}")
-        else:
-            fear_lines.append("  VIX 恐慌指数: 暂无数据")
+                fear_lines.append("  VIX 恐慌指数: 暂无数据")
 
-        # VXN
-        if sentiment.vxn > 0:
-            if sentiment.vxn >= 40:
-                vxn_status = "🔴 科技股恐慌"
-            elif sentiment.vxn >= 30:
-                vxn_status = "🟠 偏高"
+            # VXN
+            if sentiment.vxn > 0:
+                if sentiment.vxn >= 40:
+                    vxn_status = "🔴 科技股恐慌"
+                elif sentiment.vxn >= 30:
+                    vxn_status = "🟠 偏高"
+                else:
+                    vxn_status = "🟢 常态"
+                vxn_chg = f" ({sentiment.vxn_change_pct:+.1f}%)" if sentiment.vxn_change_pct != 0 else ""
+                fear_lines.append(f"  纳斯达克 VXN: **{sentiment.vxn:.2f}**{vxn_chg} {vxn_status}")
             else:
-                vxn_status = "🟢 常态"
-            vxn_chg = f" ({sentiment.vxn_change_pct:+.1f}%)" if sentiment.vxn_change_pct != 0 else ""
-            fear_lines.append(f"  纳斯达克 VXN: **{sentiment.vxn:.2f}**{vxn_chg} {vxn_status}")
-        else:
-            fear_lines.append("  纳斯达克 VXN: 暂无数据")
+                fear_lines.append("  纳斯达克 VXN: 暂无数据")
 
-        # OVX
-        if sentiment.ovx > 0:
-            if sentiment.ovx >= 60:
-                ovx_status = "🔴 极高波动"
-            elif sentiment.ovx >= 40:
-                ovx_status = "🟠 偏高"
+            # OVX
+            if sentiment.ovx > 0:
+                if sentiment.ovx >= 60:
+                    ovx_status = "🔴 极高波动"
+                elif sentiment.ovx >= 40:
+                    ovx_status = "🟠 偏高"
+                else:
+                    ovx_status = "🟢 常态"
+                ovx_chg = f" ({sentiment.ovx_change_pct:+.1f}%)" if sentiment.ovx_change_pct != 0 else ""
+                fear_lines.append(f"  原油 OVX: **{sentiment.ovx:.2f}**{ovx_chg} {ovx_status}")
             else:
-                ovx_status = "🟢 常态"
-            ovx_chg = f" ({sentiment.ovx_change_pct:+.1f}%)" if sentiment.ovx_change_pct != 0 else ""
-            fear_lines.append(f"  原油 OVX: **{sentiment.ovx:.2f}**{ovx_chg} {ovx_status}")
-        else:
-            fear_lines.append("  原油 OVX: 暂无数据")
+                fear_lines.append("  原油 OVX: 暂无数据")
 
-        # 恐贪指数
-        if sentiment.fear_greed >= 0:
-            fg = sentiment.fear_greed
-            if fg >= 80:
-                fg_icon = "🔴"
-            elif fg >= 60:
-                fg_icon = "🟠"
-            elif fg >= 40:
-                fg_icon = "🟡"
-            elif fg >= 20:
-                fg_icon = "🟢"
+            # 恐贪指数
+            if sentiment.fear_greed >= 0:
+                fg = sentiment.fear_greed
+                if fg >= 80:
+                    fg_icon = "🔴"
+                elif fg >= 60:
+                    fg_icon = "🟠"
+                elif fg >= 40:
+                    fg_icon = "🟡"
+                elif fg >= 20:
+                    fg_icon = "🟢"
+                else:
+                    fg_icon = "🔵"
+                label = sentiment.fear_greed_label or ""
+                fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
             else:
-                fg_icon = "🔵"
-            label = sentiment.fear_greed_label or ""
-            fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
-        else:
-            fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
+                fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
 
-        sections.append("### 🌡️ 全球恐慌 / 情绪指数")
-        sections.append("\n".join(fear_lines))
-        sections.append("\n")
+            sections.append("### 🌡️ 全球恐慌 / 情绪指数")
+            sections.append("\n".join(fear_lines))
+            sections.append("\n")
 
-        # ── 市场环境概览 ──
-        env_parts = []
-        if sentiment.gold_price > 0:
-            gold_icon = "↑" if sentiment.gold_change_pct > 0 else "↓"
-            env_parts.append(f"黄金 ${sentiment.gold_price:.0f}{gold_icon}")
-        if sentiment.north_flow != 0:
-            flow_icon = "+" if sentiment.north_flow > 0 else ""
-            env_parts.append(f"北向 {flow_icon}{sentiment.north_flow:.1f}亿")
-        if sentiment.up_count > 0 or sentiment.down_count > 0:
-            env_parts.append(f"涨{sentiment.up_count}/跌{sentiment.down_count}")
-        if env_parts:
-            sections.append(f"🌏 **市场环境**: {' | '.join(env_parts)}\n")
+            # ── 市场环境概览 ──
+            env_parts = []
+            if sentiment.gold_price > 0:
+                gold_icon = "↑" if sentiment.gold_change_pct > 0 else "↓"
+                env_parts.append(f"黄金 ${sentiment.gold_price:.0f}{gold_icon}")
+            if sentiment.north_flow != 0:
+                flow_icon = "+" if sentiment.north_flow > 0 else ""
+                env_parts.append(f"北向 {flow_icon}{sentiment.north_flow:.1f}亿")
+            if sentiment.up_count > 0 or sentiment.down_count > 0:
+                env_parts.append(f"涨{sentiment.up_count}/跌{sentiment.down_count}")
+            if env_parts:
+                sections.append(f"🌏 **市场环境**: {' | '.join(env_parts)}\n")
 
-        sections.append("---\n")
+            sections.append("---\n")
 
-        # ── 二、XGBoost 次日价格预测汇总（股票在前，ETF 在后）──
-        pred_lines_stock = []
-        pred_lines_etf   = []
+        # ── 二、XGBoost 次日价格预测汇总 ──
+        pred_lines = []
         for report in ordered:
             if report.pred_high > 0 and report.pred_low > 0:
                 r2_pct = int(report.pred_confidence * 100)
-                line = (
+                pred_lines.append(
                     f"  **{report.name}**({report.symbol}): "
                     f"高 `{report.pred_high:.3f}` / 低 `{report.pred_low:.3f}` "
                     f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
                 )
-                if is_etf(report.symbol):
-                    pred_lines_etf.append(line)
-                else:
-                    pred_lines_stock.append(line)
 
-        all_pred = pred_lines_stock + pred_lines_etf
-        if all_pred:
+        if pred_lines:
             sections.append("### 🤖 XGBoost 次日价格预测")
-            if pred_lines_stock:
-                sections.append("**📈 股票**")
-                sections.append("\n\n".join(pred_lines_stock))
-            if pred_lines_etf:
-                sections.append("**🗂 ETF**")
-                sections.append("\n\n".join(pred_lines_etf))
+            sections.append("\n\n".join(pred_lines))
             sections.append("\n---\n")
 
-        # ── 三、各标的详细分析（股票在前，ETF 在后）──
+        # ── 三、各标的详细分析 ──
         for report in ordered:
             sections.append(TechnicalAnalyzer.format_report(report))
             sections.append("\n---\n")
@@ -743,18 +766,12 @@ class StockAlertMonitor:
         return result
 
     def _is_signal_cooling(self, signal: AlertSignal) -> bool:
-        """检查信号是否在冷却期。如果是相同类型的信号，但触发原因不同，则不冷却（立即推送）。"""
+        """检查信号是否在冷却期。严格按照时间拦截，不再因为文本微调放行。"""
         key = f"{signal.symbol}_{signal.signal_type}"
         if key not in self._signal_cooldown:
             return False
             
         last_time, last_reason = self._signal_cooldown[key]
-        
-        # 如果原因不同，说明情况有变，不冷却
-        if last_reason != signal.reason:
-            logger.debug(f"[{signal.symbol}] {signal.signal_type} 触发新原因: {signal.reason} (原: {last_reason}) -> 绕过冷却")
-            return False
-            
         return (time.time() - last_time) < ALERT_SIGNAL_COOLDOWN
 
     def _update_signal_cooldown(self, signal: AlertSignal):

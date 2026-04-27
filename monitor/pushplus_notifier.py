@@ -37,12 +37,20 @@ class PushplusNotifier:
         try:
             payload = {
                 "token": self.token,
-                "title": title,
+                "title": title[:100],
                 "content": content,
                 "template": template,
             }
+            
+            # 本地备份一份
+            import os
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/latest_report.md", "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n{content}")
 
-            resp = requests.post(self.api_url, json=payload, timeout=10)
+            # 兼容 https
+            url = self.api_url.replace("http://", "https://")
+            resp = requests.post(url, json=payload, timeout=10)
             data = resp.json()
 
             if data.get("code") == 200:
@@ -57,8 +65,32 @@ class PushplusNotifier:
             return False
 
     def send_markdown(self, title: str, content: str) -> bool:
-        """发送 Markdown 格式消息"""
-        return self.send(title, content, template="markdown")
+        """发送 Markdown 格式消息（长度超出限制时切割推送）"""
+        MAX_LEN = 15000
+        if len(content) <= MAX_LEN:
+            return self.send(title, content, template="markdown")
+            
+        logger.info(f"[Pushplus] 内容长达 {len(content)} 字符，超过单文件上限，执行拆分推送...")
+        chunks = []
+        parts = content.split("\n---\n")
+        curr = ""
+        for p in parts:
+            if len(curr) + len(p) < MAX_LEN:
+                curr += ("\n---\n" + p) if curr else p
+            else:
+                chunks.append(curr)
+                curr = p
+        if curr:
+            chunks.append(curr)
+            
+        success = True
+        for i, chunk in enumerate(chunks, 1):
+            chunk_title = f"{title} (Part {i}/{len(chunks)})"
+            if not self.send(chunk_title, chunk, template="markdown"):
+                success = False
+            import time
+            time.sleep(1) # 避免推送被限流拦截
+        return success
 
     def send_html(self, title: str, content: str) -> bool:
         """发送 HTML 格式消息"""

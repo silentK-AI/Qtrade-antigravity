@@ -107,6 +107,9 @@ class TechnicalReport:
     pred_hit_high: bool = False   # 盘中是否已触及预测最高价
     pred_hit_low: bool = False    # 盘中是否已触及预测最低价
 
+    # LLM 基本面综合评估
+    llm_fundamental_analysis: str = ""
+
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -228,6 +231,11 @@ class TechnicalAnalyzer:
         """
         signals = []
         price = report.price
+
+        # ── 死区过滤 (Deadzone Filter) ──────────────────────────────
+        # 若日内涨跌幅在绝对值 0.5% 以内，视作死水横盘，屏蔽所有低评级的常规技术信号
+        # 以免反复在均线附近金叉死叉造成无穷打扰。止损信号不受影响。
+        is_deadzone = abs(report.change_pct) < 0.5
 
         # ── 预计算公共状态 ──────────────────────────────────────────
         # 趋势状态
@@ -353,8 +361,8 @@ class TechnicalAnalyzer:
             elif vol_weak:
                 buy_reasons.append(f"缩量（量比{report.volume_ratio:.1f}x，信号偏弱）")
 
-            # 门槛收紧：需 >= 3 个条件且强度 >= 0.55
-            if len(buy_reasons) >= 3 and buy_strength >= 0.55:
+            # 门槛收紧：需 >= 3 个条件且强度 >= 0.65，且不在横盘死区
+            if len(buy_reasons) >= 3 and buy_strength >= 0.65 and not is_deadzone:
                 # 止损价：S2 下方 0.5%，无 S2 则用 ATR 动态止损
                 if report.support_s2 > 0:
                     stop = report.support_s2 * 0.995
@@ -433,7 +441,7 @@ class TechnicalAnalyzer:
         if vol_strong:
             tp_reasons.append(f"放量见顶风险（量比{report.volume_ratio:.1f}x）")
 
-        if len(tp_reasons) >= 2 and tp_strength >= 0.45:
+        if len(tp_reasons) >= 2 and tp_strength >= 0.55 and not is_deadzone:
             signals.append(AlertSignal(
                 symbol=report.symbol,
                 name=report.name,
@@ -987,8 +995,12 @@ class TechnicalAnalyzer:
         lines.append(f"  结论：{conclusion_detail}")
         lines.append(f"  操作：{action}")
 
-        return "\n".join(lines)
+        if report.llm_fundamental_analysis:
+            lines.append("")
+            lines.append("**四、基本面与风险评价（AI分析）**")
+            lines.append(report.llm_fundamental_analysis)
 
+        return "\n".join(lines)
     @staticmethod
     def format_signal(signal: AlertSignal) -> str:
         """将 AlertSignal 格式化为微信推送文本"""
