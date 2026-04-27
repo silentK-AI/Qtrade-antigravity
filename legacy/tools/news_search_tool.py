@@ -37,21 +37,23 @@ class NewsSearchTool:
         """
         try:
             # 这里可以使用实际的API或爬虫来获取公司公告
-            # 示例：使用akshare获取公司公告
             import akshare as ak
             
-            # 获取公司公告（示例接口，可能需要根据实际情况调整）
             announcements = []
             
             # 尝试获取公告数据
             try:
-                # 注意：这里需要根据akshare的实际API调整
-                # 示例代码，实际使用时需要验证API
+                # 过滤掉 ETF (15, 51, 58 开头)，它们没有个股公告
+                if stock_code.startswith(("15", "51", "58")):
+                    raise ValueError("ETF 无个股公告")
+                    
                 stock_news = ak.stock_notice_report(symbol=stock_code)
                 if stock_news is not None and not stock_news.empty:
                     announcements = stock_news.head(limit).to_dict(orient="records")
             except Exception as e:
-                logger.warning(f"无法通过akshare获取公告: {str(e)}")
+                # 压制无公告导致的特殊报错
+                if "infoCode" not in str(e) and "ETF" not in str(e):
+                    logger.debug(f"无法通过akshare获取公告[{stock_code}]: {str(e)}")
             
             return {
                 "success": True,
@@ -82,17 +84,19 @@ class NewsSearchTool:
         """
         try:
             import akshare as ak
-            
             reports = []
             
             # 尝试获取研报数据
             try:
-                # 注意：这里需要根据akshare的实际API调整
+                if stock_code.startswith(("15", "51", "58")):
+                    raise ValueError("ETF 无个股研报")
+                    
                 stock_reports = ak.stock_research_report_em(symbol=stock_code)
                 if stock_reports is not None and not stock_reports.empty:
                     reports = stock_reports.head(limit).to_dict(orient="records")
             except Exception as e:
-                logger.warning(f"无法通过akshare获取研报: {str(e)}")
+                if "infoCode" not in str(e) and "ETF" not in str(e):
+                    logger.debug(f"无法通过akshare获取研报[{stock_code}]: {str(e)}")
             
             return {
                 "success": True,
