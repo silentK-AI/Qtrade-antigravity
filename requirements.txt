@@ -5,15 +5,16 @@ pandas>=2.0.0          # 数据处理
 numpy>=1.24.0          # 数值计算
 python-dotenv>=1.0.0   # 环境变量管理
 loguru>=0.7.0          # 结构化日志
-requests>=2.31.0       # HTTP 请求（通知模块）
+requests>=2.31.0       # HTTP 请求（通知模块、LLM）
 pytest>=7.4.0          # 测试框架
 flask>=3.0.0           # Dashboard Web 服务
 baostock>=0.8.8        # 历史行情数据（回测用）
 xgboost>=2.0.0         # XGBoost 价格预测模型
 scikit-learn>=1.3.0    # 特征处理和模型评估
 joblib>=1.3.0          # 模型序列化
+schedule==1.2.2        # 定时任务
+markdown               # (测试及报告备份)
 
 # 实盘交易（Windows 环境安装）:
 # easytrader>=0.20.0   # 同花顺自动交易
 # xtquant              # miniQMT SDK（备选方案）
-schedule==1.2.2
