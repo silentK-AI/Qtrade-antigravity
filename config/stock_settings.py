@@ -30,13 +30,15 @@ STOCK_ALERT_SYMBOLS = {
     "601899": {"name": "紫金矿业", "type": "stock", "exchange": "SH"},
     
     # 行业/宽基 ETF (按用户指定顺序)
+    "513650": {"name": "标普ETF", "type": "etf", "exchange": "SH"},
     "588200": {"name": "科创芯片ETF", "type": "etf", "exchange": "SH"},
-    "159227": {"name": "航空航天ETF", "type": "etf", "exchange": "SZ"},
-    "515230": {"name": "软件ETF", "type": "etf", "exchange": "SH"},
-    "159326": {"name": "电网设备ETF", "type": "etf", "exchange": "SZ"},
-    "159363": {"name": "AIGC ETF", "type": "etf", "exchange": "SZ"},
+    "159363": {"name": "人工智能/AIGC ETF", "type": "etf", "exchange": "SZ"},  # 用户提供了两次159363(名字不同)，已合并
+    "515880": {"name": "通信ETF(国泰)", "type": "etf", "exchange": "SH"},
     "159770": {"name": "机器人ETF", "type": "etf", "exchange": "SZ"},
     "159767": {"name": "电池龙头ETF", "type": "etf", "exchange": "SZ"},
+    "159227": {"name": "航空航天ETF", "type": "etf", "exchange": "SZ"},
+    "159326": {"name": "电网设备ETF", "type": "etf", "exchange": "SZ"},
+    "159740": {"name": "恒生科技ETF", "type": "etf", "exchange": "SZ"},
 }
 
 ALERT_PREMARKET_TIME = "09:25"      # 盘前报告推送时间（9:25开盘后获取开盘价）
