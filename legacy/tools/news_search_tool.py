@@ -288,19 +288,23 @@ def search_stock_news_tool(stock_code: str) -> str:
     return search_stock_news_tool_func(stock_code)
 
 
-# 使用CrewAI的tool装饰器
-from crewai.tools import tool
+# 使用CrewAI的tool装饰器（可选）
+try:
+    from crewai.tools import tool
 
-@tool("搜索股票相关资讯")
-def search_stock_news_tool_obj(stock_code: str) -> str:
-    """
-    搜索股票相关的最新资讯，包括公司公告、券商研报、大宗商品价格、美联储议息决议、美国关税政策等
-    
-    Args:
-        stock_code: 股票代码（如：000001）
-    
-    Returns:
-        格式化的资讯收集报告
-    """
-    return search_stock_news_tool(stock_code)
+    @tool("搜索股票相关资讯")
+    def search_stock_news_tool_obj(stock_code: str) -> str:
+        """
+        搜索股票相关的最新资讯，包括公司公告、券商研报、大宗商品价格、美联储议息决议、美国关税政策等
+        
+        Args:
+            stock_code: 股票代码（如：000001）
+        
+        Returns:
+            格式化的资讯收集报告
+        """
+        return search_stock_news_tool(stock_code)
+except ImportError:
+    # 如果没装 crewai，则不注册该 tool 装饰器
+    pass
 
