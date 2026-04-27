@@ -13,15 +13,21 @@ load_dotenv(env_path, override=True)
 # ============================================================
 STOCK_ALERT_SYMBOLS = {
     # 核心持仓/自选股票 (按用户指定顺序)
+    "002230": {"name": "科大讯飞", "type": "stock", "exchange": "SZ"},  # 注意：用户原提供002030为笔误
+    "002050": {"name": "三花智控", "type": "stock", "exchange": "SZ"},
+    "000559": {"name": "万向钱潮", "type": "stock", "exchange": "SZ"},
+    "301666": {"name": "大普微", "type": "stock", "exchange": "SZ"},
+    "300274": {"name": "阳光电源", "type": "stock", "exchange": "SZ"},
+    "300750": {"name": "宁德时代", "type": "stock", "exchange": "SZ"},
+    "000988": {"name": "华工科技", "type": "stock", "exchange": "SZ"},
     "000063": {"name": "中兴通讯", "type": "stock", "exchange": "SZ"},
     "000333": {"name": "美的集团", "type": "stock", "exchange": "SZ"},
     "000100": {"name": "TCL科技", "type": "stock", "exchange": "SZ"},
     "002475": {"name": "立讯精密", "type": "stock", "exchange": "SZ"},
-    "002050": {"name": "三花智控", "type": "stock", "exchange": "SZ"},
-    "000559": {"name": "万向钱潮", "type": "stock", "exchange": "SZ"},
     "603667": {"name": "五洲新春", "type": "stock", "exchange": "SH"},
-    "000988": {"name": "华工科技", "type": "stock", "exchange": "SZ"},
     "300308": {"name": "中际旭创", "type": "stock", "exchange": "SZ"},
+    "002472": {"name": "双环传动", "type": "stock", "exchange": "SZ"},
+    "601899": {"name": "紫金矿业", "type": "stock", "exchange": "SH"},
     
     # 行业/宽基 ETF (按用户指定顺序)
     "588200": {"name": "科创芯片ETF", "type": "etf", "exchange": "SH"},
