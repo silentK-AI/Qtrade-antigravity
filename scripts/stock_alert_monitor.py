@@ -579,23 +579,7 @@ class StockAlertMonitor:
                 else:
                     fear_lines.append("  原油 OVX: 暂无数据")
 
-                # 恐贪指数
-                if sentiment.fear_greed >= 0:
-                    fg = sentiment.fear_greed
-                    if fg >= 80:
-                        fg_icon = "🔴"
-                    elif fg >= 60:
-                        fg_icon = "🟠"
-                    elif fg >= 40:
-                        fg_icon = "🟡"
-                    elif fg >= 20:
-                        fg_icon = "🟢"
-                    else:
-                        fg_icon = "🔵"
-                    label = sentiment.fear_greed_label or ""
-                    fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
-                else:
-                    fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
+
 
                 sections.append("### 🌡️ 全球恐慌 / 情绪指数")
                 sections.append("\n".join(fear_lines))

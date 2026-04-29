@@ -62,8 +62,7 @@ class MarketSentiment:
     vxn_change_pct: float = 0.0 # VXN 涨跌幅 (%)
     ovx: float = 0.0            # 原油 ETF 波动率指数 OVX
     ovx_change_pct: float = 0.0 # OVX 涨跌幅 (%)
-    fear_greed: int = -1        # 韭圈儿恐贪指数（0-100, -1=未获取）
-    fear_greed_label: str = ""  # 恐贪指数标签（极度恐慌/恐慌/中性/贪婪/极度贪婪）
+
     sh_change_pct: float = 0.0  # 上证指数涨跌幅 (%)
     sz_change_pct: float = 0.0  # 深证成指涨跌幅 (%)
     timestamp: datetime = field(default_factory=datetime.now)
@@ -565,11 +564,7 @@ class StockDataService:
         except Exception as e:
             logger.debug(f"获取恐慌指数失败: {e}")
 
-        # 韭圈儿恐贪指数
-        try:
-            self._fetch_fear_greed(sentiment)
-        except Exception as e:
-            logger.debug(f"获取韭圈儿恐贪指数失败: {e}")
+
 
         sentiment.timestamp = datetime.now()
         self._cache.set("market_sentiment", sentiment)
@@ -744,91 +739,4 @@ class StockDataService:
             except Exception as e:
                 logger.debug(f"akshare VIX 失败: {e}")
 
-    def _fetch_fear_greed(self, sentiment: MarketSentiment):
-        """
-        获取恐贪指数（A股/全球）。
-        数据源优先级:
-          1. 韭圈儿 open API（先直连，失败再走代理）
-          2. alternative.me Fear & Greed（走系统代理，无代理环境跳过）
-          3. 基于大盘涨跌家数估算（兜底，始终可用）
-        """
-        direct_http = self._http
-        proxy_http = self._create_proxy_session()
 
-        # --- 源1: 韭圈儿（先直连，失败再走代理）---
-        try:
-            url = "https://open.jiucaishuo.com/api/v1/greedy_index/newest"
-            headers = {
-                "Referer": "https://www.jiucaishuo.com/",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Origin": "https://www.jiucaishuo.com",
-            }
-            for sess in [direct_http, proxy_http]:
-                try:
-                    sess.headers.update(headers)
-                    resp = sess.get(url, timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("code") == 0 and "data" in data:
-                            d = data["data"]
-                            idx = int(d.get("index", -1))
-                            label = str(d.get("label") or d.get("name") or "")
-                            if idx >= 0:
-                                sentiment.fear_greed = idx
-                                sentiment.fear_greed_label = label
-                                logger.debug(f"[韭圈儿] 恐贪指数: {idx} ({label})")
-                                return
-                except Exception:
-                    # 韭圈儿直连/代理尝试失败是预期内的网络波动，静默处理
-                    continue
-        except Exception:
-            pass
-
-        # --- 源2: alternative.me（走系统代理，无代理环境会失败，有兜底）---
-        try:
-            resp2 = proxy_http.get("https://api.alternative.me/fng/?limit=1", timeout=8)
-            if resp2.status_code == 200:
-                data2 = resp2.json()
-                items = data2.get("data", [])
-                if items:
-                    idx = int(items[0].get("value", -1))
-                    raw_label = str(items[0].get("value_classification", ""))
-                    label_map = {
-                        "Extreme Fear": "极度恐慌",
-                        "Fear": "恐慌",
-                        "Neutral": "中性",
-                        "Greed": "贪婪",
-                        "Extreme Greed": "极度贪婪",
-                    }
-                    label = label_map.get(raw_label, raw_label)
-                    if idx >= 0:
-                        sentiment.fear_greed = idx
-                        sentiment.fear_greed_label = label + "(全球)"
-                        logger.debug(f"[alternative.me] 恐贪指数: {idx} ({label})")
-                        return
-        except Exception:
-            pass
-
-        # --- 源3: 基于大盘技术面估算（兜底，始终可用）---
-        try:
-            # 用上证指数 RSI + 涨跌家数 简单估算
-            # 已知 sentiment.up_count / down_count
-            total = sentiment.up_count + sentiment.down_count
-            if total > 0:
-                up_ratio = sentiment.up_count / total  # 0~1
-                # 线性映射到 0-100：0%上涨=极度恐慌(0), 100%上涨=极度贪婪(100)
-                idx = round(up_ratio * 100)
-                if idx >= 60:
-                    label = "贪婪(估算)"
-                elif idx >= 45:
-                    label = "中性(估算)"
-                elif idx >= 30:
-                    label = "恐慌(估算)"
-                else:
-                    label = "极度恐慌(估算)"
-                sentiment.fear_greed = idx
-                sentiment.fear_greed_label = label
-                logger.debug(f"[估算] 恐贪指数: {idx} ({label})，涨家{sentiment.up_count}/跌家{sentiment.down_count}")
-        except Exception as e:
-            logger.debug(f"恐贪指数估算失败: {e}")
