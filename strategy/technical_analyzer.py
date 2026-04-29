@@ -791,13 +791,13 @@ class TechnicalAnalyzer:
 
         report.score = round(max(-100, min(100, score)), 1)
 
-        if score > 30:
+        if score >= 40:
             report.score_label = "强势看多"
-        elif score > 10:
+        elif score >= 15:
             report.score_label = "偏多"
-        elif score > -10:
+        elif score >= -15:
             report.score_label = "中性"
-        elif score > -30:
+        elif score >= -40:
             report.score_label = "偏空"
         else:
             report.score_label = "强势看空"
@@ -821,24 +821,41 @@ class TechnicalAnalyzer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_conclusion(score: float) -> str:
-        if score > 40:
-            return "短期技术偏强，多头格局延续，可积极关注。"
-        elif score > 15:
-            return "中期趋势向好，短期有所分歧，建议观望择机介入。"
-        elif score > -15:
-            return "技术指标中性，多空均衡，短期方向不明，宜观望为主。"
-        elif score > -40:
-            return "短期技术走弱，建议谨慎，等待企稳信号后再考虑介入。"
+    def get_conclusion(report: TechnicalReport) -> str:
+        score = report.score
+        # 基础趋势判断
+        if score >= 40:
+            base = "短期技术面处于强势状态，多头格局延续，可积极关注。"
+        elif score >= 15:
+            base = "中期趋势向好，但短期力度有所减弱，建议寻找支撑位介入。"
+        elif score >= -15:
+            base = "技术指标中性，多空均衡，短期方向不明，宜观望为主。"
+        elif score >= -40:
+            base = "短期技术走弱，建议谨慎，等待企稳信号后再考虑介入。"
         else:
-            return "技术指标全面走弱，空头占优，建议回避或减仓观望。"
+            base = "技术指标全面走弱，空头占优，建议回避或减仓观望。"
+
+        # 结合 XGBoost 预测进行修正（如果技术面看多但 ML 预测看空，提示分歧）
+        if report.pred_high > 0 and report.pred_low > 0:
+            mid = (report.pred_high + report.pred_low) / 2
+            anchor = report.today_open if report.today_open > 0 else report.price
+            if anchor > 0:
+                pred_pct = (mid - anchor) / anchor * 100
+                # 如果趋势看多 (+15以上) 但预测看空 (-0.8%以下)，提示分歧
+                if score >= 15 and pred_pct < -0.8:
+                    return base + " **⚠️ 注意：机器学习预测日内走势偏弱，存在短期分歧，建议谨慎操作。**"
+                # 如果趋势看空 (-15以下) 但预测看多 (+0.8%以上)，提示机会
+                if score <= -15 and pred_pct > 0.8:
+                    return base + " **💡 提示：机器学习预测日内有超跌反弹迹象，关注支撑位反弹机会。**"
+        
+        return base
 
     @staticmethod
     def _format_header_and_quotes(report: TechnicalReport) -> list[str]:
         _ts = report.timestamp
         now_str = f"{_ts.year}年{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
         change_icon = "📉" if report.change_pct < 0 else "📈" if report.change_pct > 0 else "➡️"
-        conclusion = TechnicalAnalyzer.get_conclusion(report.score)
+        conclusion = TechnicalAnalyzer.get_conclusion(report)
 
         lines = [
             f"**{report.name}（{report.symbol}）** — 截至 {now_str}",
@@ -974,7 +991,7 @@ class TechnicalAnalyzer:
     @staticmethod
     def _format_tail_parts(report: TechnicalReport) -> list[str]:
         lines = []
-        conclusion = TechnicalAnalyzer.get_conclusion(report.score)
+        conclusion = TechnicalAnalyzer.get_conclusion(report)
         lines.append("**三、综合评估与操作建议**")
         score_label_map = {
             "强势看多": ("当前技术面偏强，可考虑轻仓介入或持仓", "空仓可在支撑位分批建仓；持仓可持有，跌破S2止损"),
