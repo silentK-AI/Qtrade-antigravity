@@ -506,8 +506,9 @@ class StockAlertMonitor:
         title_type = "股票" if is_stock else "ETF"
         sections = [f"# 📊 {title_type}盘前技术分析\n> {date_str}\n"]
 
-        # 按评分降序
-        ordered = sorted(reports, key=lambda r: r.score, reverse=True)
+        # 按照用户在配置文件中定义的原本顺序排列
+        symbol_order = list(STOCK_ALERT_SYMBOLS.keys())
+        ordered = sorted(reports, key=lambda r: symbol_order.index(r.symbol) if r.symbol in symbol_order else 999)
 
         # ── 一、恐慌 / 情绪指数 (为了防冗余，只有在发股票时带上市场环境) ──
         if is_stock:
