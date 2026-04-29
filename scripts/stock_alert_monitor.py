@@ -488,139 +488,155 @@ class StockAlertMonitor:
 
         # 推送股票部分
         if stock_reports:
-            logger.info(f"推送股票盘前报告 ({len(stock_reports)} 只标的)")
-            stock_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True)
-            self._notifier.notify_premarket_report(stock_content, is_stock=True)
+            logger.info(f"推送股票盘前核心报告 ({len(stock_reports)} 只标的)")
+            stock_main_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True, report_type="main")
+            self._notifier.notify_premarket_report(stock_main_content, is_stock=True)
+            
+            logger.info(f"推送股票关键技术指标报告 ({len(stock_reports)} 只标的)")
+            stock_tech_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True, report_type="tech")
+            self._notifier.notify_premarket_report(stock_tech_content, is_stock=True)
             
         # 推送 ETF 部分
         if etf_reports:
-            logger.info(f"推送ETF盘前报告 ({len(etf_reports)} 只标的)")
-            etf_content = self._format_premarket_content(etf_reports, sentiment, is_stock=False)
+            logger.info(f"推送ETF盘前综合报告 ({len(etf_reports)} 只标的)")
+            etf_content = self._format_premarket_content(etf_reports, sentiment, is_stock=False, report_type="full")
             self._notifier.notify_premarket_report(etf_content, is_stock=False)
 
         logger.info("盘前报告推送完成 ✓")
 
     def _format_premarket_content(
-        self, reports: list[TechnicalReport], sentiment: MarketSentiment, is_stock: bool
+        self, reports: list[TechnicalReport], sentiment: MarketSentiment, is_stock: bool, report_type: str = "full"
     ) -> str:
         """组装盘前报告完整内容"""
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         title_type = "股票" if is_stock else "ETF"
-        sections = [f"# 📊 {title_type}盘前技术分析\n> {date_str}\n"]
+        
+        if report_type == "tech":
+            sections = [f"# 📉 {title_type}关键技术指标分析\n> {date_str}\n"]
+        elif report_type == "main":
+            sections = [f"# 📊 {title_type}盘前核心分析\n> {date_str}\n"]
+        else:
+            sections = [f"# 📊 {title_type}盘前综合分析\n> {date_str}\n"]
 
         # 按照用户在配置文件中定义的原本顺序排列
         symbol_order = list(STOCK_ALERT_SYMBOLS.keys())
         ordered = sorted(reports, key=lambda r: symbol_order.index(r.symbol) if r.symbol in symbol_order else 999)
 
-        # ── 一、恐慌 / 情绪指数 (为了防冗余，只有在发股票时带上市场环境) ──
-        if is_stock:
-            fear_lines = []
+        if report_type in ("full", "main"):
+            # ── 一、恐慌 / 情绪指数 (为了防冗余，只有在发股票时带上市场环境) ──
+            if is_stock:
+                fear_lines = []
 
-            # VIX
-            if sentiment.vix > 0:
-                if sentiment.vix >= 40:
-                    vix_status = "🔴 极端恐慌"
-                elif sentiment.vix >= 30:
-                    vix_status = "🟠 市场紧张"
+                # VIX
+                if sentiment.vix > 0:
+                    if sentiment.vix >= 40:
+                        vix_status = "🔴 极端恐慌"
+                    elif sentiment.vix >= 30:
+                        vix_status = "🟠 市场紧张"
+                    else:
+                        vix_status = "🟢 常态"
+                    vix_chg = f" ({sentiment.vix_change_pct:+.1f}%)" if sentiment.vix_change_pct != 0 else ""
+                    fear_lines.append(f"  VIX 恐慌指数: **{sentiment.vix:.2f}**{vix_chg} {vix_status}")
                 else:
-                    vix_status = "🟢 常态"
-                vix_chg = f" ({sentiment.vix_change_pct:+.1f}%)" if sentiment.vix_change_pct != 0 else ""
-                fear_lines.append(f"  VIX 恐慌指数: **{sentiment.vix:.2f}**{vix_chg} {vix_status}")
-            else:
-                fear_lines.append("  VIX 恐慌指数: 暂无数据")
+                    fear_lines.append("  VIX 恐慌指数: 暂无数据")
 
-            # VXN
-            if sentiment.vxn > 0:
-                if sentiment.vxn >= 40:
-                    vxn_status = "🔴 科技股恐慌"
-                elif sentiment.vxn >= 30:
-                    vxn_status = "🟠 偏高"
+                # VXN
+                if sentiment.vxn > 0:
+                    if sentiment.vxn >= 40:
+                        vxn_status = "🔴 科技股恐慌"
+                    elif sentiment.vxn >= 30:
+                        vxn_status = "🟠 偏高"
+                    else:
+                        vxn_status = "🟢 常态"
+                    vxn_chg = f" ({sentiment.vxn_change_pct:+.1f}%)" if sentiment.vxn_change_pct != 0 else ""
+                    fear_lines.append(f"  纳斯达克 VXN: **{sentiment.vxn:.2f}**{vxn_chg} {vxn_status}")
                 else:
-                    vxn_status = "🟢 常态"
-                vxn_chg = f" ({sentiment.vxn_change_pct:+.1f}%)" if sentiment.vxn_change_pct != 0 else ""
-                fear_lines.append(f"  纳斯达克 VXN: **{sentiment.vxn:.2f}**{vxn_chg} {vxn_status}")
-            else:
-                fear_lines.append("  纳斯达克 VXN: 暂无数据")
+                    fear_lines.append("  纳斯达克 VXN: 暂无数据")
 
-            # OVX
-            if sentiment.ovx > 0:
-                if sentiment.ovx >= 60:
-                    ovx_status = "🔴 极高波动"
-                elif sentiment.ovx >= 40:
-                    ovx_status = "🟠 偏高"
+                # OVX
+                if sentiment.ovx > 0:
+                    if sentiment.ovx >= 60:
+                        ovx_status = "🔴 极高波动"
+                    elif sentiment.ovx >= 40:
+                        ovx_status = "🟠 偏高"
+                    else:
+                        ovx_status = "🟢 常态"
+                    ovx_chg = f" ({sentiment.ovx_change_pct:+.1f}%)" if sentiment.ovx_change_pct != 0 else ""
+                    fear_lines.append(f"  原油 OVX: **{sentiment.ovx:.2f}**{ovx_chg} {ovx_status}")
                 else:
-                    ovx_status = "🟢 常态"
-                ovx_chg = f" ({sentiment.ovx_change_pct:+.1f}%)" if sentiment.ovx_change_pct != 0 else ""
-                fear_lines.append(f"  原油 OVX: **{sentiment.ovx:.2f}**{ovx_chg} {ovx_status}")
-            else:
-                fear_lines.append("  原油 OVX: 暂无数据")
+                    fear_lines.append("  原油 OVX: 暂无数据")
 
-            # 恐贪指数
-            if sentiment.fear_greed >= 0:
-                fg = sentiment.fear_greed
-                if fg >= 80:
-                    fg_icon = "🔴"
-                elif fg >= 60:
-                    fg_icon = "🟠"
-                elif fg >= 40:
-                    fg_icon = "🟡"
-                elif fg >= 20:
-                    fg_icon = "🟢"
+                # 恐贪指数
+                if sentiment.fear_greed >= 0:
+                    fg = sentiment.fear_greed
+                    if fg >= 80:
+                        fg_icon = "🔴"
+                    elif fg >= 60:
+                        fg_icon = "🟠"
+                    elif fg >= 40:
+                        fg_icon = "🟡"
+                    elif fg >= 20:
+                        fg_icon = "🟢"
+                    else:
+                        fg_icon = "🔵"
+                    label = sentiment.fear_greed_label or ""
+                    fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
                 else:
-                    fg_icon = "🔵"
-                label = sentiment.fear_greed_label or ""
-                fear_lines.append(f"  韭圈儿恐贪指数: **{fg}** {fg_icon} {label}")
-            else:
-                fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
+                    fear_lines.append("  韭圈儿恐贪指数: 暂无数据")
 
-            sections.append("### 🌡️ 全球恐慌 / 情绪指数")
-            sections.append("\n".join(fear_lines))
-            sections.append("\n")
+                sections.append("### 🌡️ 全球恐慌 / 情绪指数")
+                sections.append("\n".join(fear_lines))
+                sections.append("\n")
 
-            # ── 市场环境概览 ──
-            env_parts = []
-            if sentiment.gold_price > 0:
-                gold_icon = "↑" if sentiment.gold_change_pct > 0 else "↓"
-                env_parts.append(f"黄金 ${sentiment.gold_price:.0f}{gold_icon}")
-            if sentiment.north_flow != 0:
-                flow_icon = "+" if sentiment.north_flow > 0 else ""
-                env_parts.append(f"北向 {flow_icon}{sentiment.north_flow:.1f}亿")
-            if sentiment.up_count > 0 or sentiment.down_count > 0:
-                env_parts.append(f"涨{sentiment.up_count}/跌{sentiment.down_count}")
-            if env_parts:
-                sections.append(f"🌏 **市场环境**: {' | '.join(env_parts)}\n")
+                # ── 市场环境概览 ──
+                env_parts = []
+                if sentiment.gold_price > 0:
+                    gold_icon = "↑" if sentiment.gold_change_pct > 0 else "↓"
+                    env_parts.append(f"黄金 ${sentiment.gold_price:.0f}{gold_icon}")
+                if sentiment.north_flow != 0:
+                    flow_icon = "+" if sentiment.north_flow > 0 else ""
+                    env_parts.append(f"北向 {flow_icon}{sentiment.north_flow:.1f}亿")
+                if sentiment.up_count > 0 or sentiment.down_count > 0:
+                    env_parts.append(f"涨{sentiment.up_count}/跌{sentiment.down_count}")
+                if env_parts:
+                    sections.append(f"🌏 **市场环境**: {' | '.join(env_parts)}\n")
 
-            sections.append("---\n")
+                sections.append("---\n")
 
-        # ── 二、XGBoost 次日价格预测汇总 ──
-        pred_lines = []
-        for report in ordered:
-            if report.pred_high > 0 and report.pred_low > 0:
-                r2_pct = int(report.pred_confidence * 100)
-                anchor = report.today_open if report.today_open > 0 else (report.prev_close if report.prev_close > 0 else report.price)
-                if anchor > 0:
-                    high_pct = (report.pred_high - anchor) / anchor * 100
-                    low_pct = (report.pred_low - anchor) / anchor * 100
-                else:
-                    high_pct = 0.0
-                    low_pct = 0.0
-                
-                open_str = f"开{report.today_open:.2f}" if report.today_open > 0 else "开盘未知"
-                pred_lines.append(
-                    f"  **{report.name}**({report.symbol}): "
-                    f"{open_str} / 高 `{report.pred_high:.3f}` ({high_pct:+.2f}%) / "
-                    f"低 `{report.pred_low:.3f}` ({low_pct:+.2f}%) "
-                    f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
-                )
+            # ── 二、XGBoost 次日价格预测汇总 ──
+            pred_lines = []
+            for report in ordered:
+                if report.pred_high > 0 and report.pred_low > 0:
+                    r2_pct = int(report.pred_confidence * 100)
+                    anchor = report.today_open if report.today_open > 0 else (report.prev_close if report.prev_close > 0 else report.price)
+                    if anchor > 0:
+                        high_pct = (report.pred_high - anchor) / anchor * 100
+                        low_pct = (report.pred_low - anchor) / anchor * 100
+                    else:
+                        high_pct = 0.0
+                        low_pct = 0.0
+                    
+                    open_str = f"开{report.today_open:.2f}" if report.today_open > 0 else "开盘未知"
+                    pred_lines.append(
+                        f"  **{report.name}**({report.symbol}): "
+                        f"{open_str} / 高 `{report.pred_high:.3f}` ({high_pct:+.2f}%) / "
+                        f"低 `{report.pred_low:.3f}` ({low_pct:+.2f}%) "
+                        f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
+                    )
 
-        if pred_lines:
-            sections.append("### 🤖 XGBoost 次日价格预测")
-            sections.append("\n\n".join(pred_lines))
-            sections.append("\n---\n")
+            if pred_lines:
+                sections.append("### 🤖 XGBoost 次日价格预测")
+                sections.append("\n\n".join(pred_lines))
+                sections.append("\n---\n")
 
         # ── 三、各标的详细分析 ──
         for report in ordered:
-            sections.append(TechnicalAnalyzer.format_report(report))
+            if report_type == "tech":
+                sections.append(TechnicalAnalyzer.format_tech_report(report))
+            elif report_type == "main":
+                sections.append(TechnicalAnalyzer.format_main_report(report))
+            else:
+                sections.append(TechnicalAnalyzer.format_report(report))
             sections.append("\n---\n")
 
         return "\n".join(sections)

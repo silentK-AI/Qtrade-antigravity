@@ -821,31 +821,30 @@ class TechnicalAnalyzer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def format_report(report: TechnicalReport) -> str:
-        """将 TechnicalReport 格式化为四节结构的盘前分析报告（Markdown）"""
+    def get_conclusion(score: float) -> str:
+        if score > 40:
+            return "短期技术偏强，多头格局延续，可积极关注。"
+        elif score > 15:
+            return "中期趋势向好，短期有所分歧，建议观望择机介入。"
+        elif score > -15:
+            return "技术指标中性，多空均衡，短期方向不明，宜观望为主。"
+        elif score > -40:
+            return "短期技术走弱，建议谨慎，等待企稳信号后再考虑介入。"
+        else:
+            return "技术指标全面走弱，空头占优，建议回避或减仓观望。"
+
+    @staticmethod
+    def _format_header_and_quotes(report: TechnicalReport) -> list[str]:
         _ts = report.timestamp
         now_str = f"{_ts.year}年{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
         change_icon = "📉" if report.change_pct < 0 else "📈" if report.change_pct > 0 else "➡️"
-
-        # ── 综合结论导语 ──
-        score = report.score
-        if score > 40:
-            conclusion = "短期技术偏强，多头格局延续，可积极关注。"
-        elif score > 15:
-            conclusion = "中期趋势向好，短期有所分歧，建议观望择机介入。"
-        elif score > -15:
-            conclusion = "技术指标中性，多空均衡，短期方向不明，宜观望为主。"
-        elif score > -40:
-            conclusion = "短期技术走弱，建议谨慎，等待企稳信号后再考虑介入。"
-        else:
-            conclusion = "技术指标全面走弱，空头占优，建议回避或减仓观望。"
+        conclusion = TechnicalAnalyzer.get_conclusion(report.score)
 
         lines = [
             f"**{report.name}（{report.symbol}）** — 截至 {now_str}",
             f"{conclusion}",
         ]
 
-        # ── XGBoost 次日价格预测（置于标题下方）──
         if report.pred_high > 0 and report.pred_low > 0 and report.price > 0:
             mid = (report.pred_high + report.pred_low) / 2
             pred_dir_pct = (mid - report.price) / report.price * 100
@@ -856,37 +855,29 @@ class TechnicalAnalyzer:
             lines.append(pred_color)
 
         lines.append("")
-
-        # ── 一、核心行情 ──
         lines.append(f"**一、核心行情**")
         chg_str = f"{report.change_pct:+.2f}%"
         lines.append(f"股价：{report.price:.3f} 元，当日 **{chg_str}** {change_icon}")
         if report.day_high > 0 and report.day_low > 0:
             lines.append(f"当日最高 {report.day_high:.3f} 元 / 最低 {report.day_low:.3f} 元")
 
-        # 区间涨跌
         ret_parts = []
-        if report.ret_10d != 0:
-            ret_parts.append(f"近10日 {report.ret_10d:+.1f}%")
-        if report.ret_60d != 0:
-            ret_parts.append(f"近3月 {report.ret_60d:+.1f}%")
-        if report.ret_250d != 0:
-            ret_parts.append(f"近1年 {report.ret_250d:+.1f}%")
-        if ret_parts:
-            lines.append("区间涨跌：" + " | ".join(ret_parts))
+        if report.ret_10d != 0: ret_parts.append(f"近10日 {report.ret_10d:+.1f}%")
+        if report.ret_60d != 0: ret_parts.append(f"近3月 {report.ret_60d:+.1f}%")
+        if report.ret_250d != 0: ret_parts.append(f"近1年 {report.ret_250d:+.1f}%")
+        if ret_parts: lines.append("区间涨跌：" + " | ".join(ret_parts))
 
-        # 主力资金
         if report.net_flow_valid:
             flow_icon = "📥" if report.net_flow_main > 0 else "📤"
             flow_word = "净流入" if report.net_flow_main > 0 else "净流出"
             lines.append(f"主力资金：{flow_icon} {flow_word} {abs(report.net_flow_main):.2f} 亿元")
-
         lines.append("")
+        return lines
 
-        # ── 二、关键技术指标 ──
+    @staticmethod
+    def _format_tech_details(report: TechnicalReport) -> list[str]:
+        lines = []
         lines.append(f"**二、关键技术指标（日线）**")
-
-        # 1. 趋势与均线
         lines.append(f"**1. 趋势与均线**")
         ma_parts = []
         if report.ma5 > 0:   ma_parts.append(f"MA5={report.ma5:.3f}{report.ma5_trend}")
@@ -898,7 +889,6 @@ class TechnicalAnalyzer:
         if ma_parts:
             lines.append("  " + "  ".join(ma_parts))
 
-        # 均线多空排列判断
         if report.ma5 > 0 and report.ma10 > 0 and report.ma20 > 0:
             if report.ma5 > report.ma10 > report.ma20:
                 lines.append("  多头排列（MA5>MA10>MA20），中期上升趋势延续")
@@ -907,7 +897,6 @@ class TechnicalAnalyzer:
             else:
                 lines.append("  均线交织，趋势不明朗，震荡格局")
 
-        # 与关键均线对比
         if report.ma5 > 0:
             rel5 = (report.price - report.ma5) / report.ma5 * 100
             pos5 = "上方" if rel5 > 0 else "下方"
@@ -918,8 +907,6 @@ class TechnicalAnalyzer:
             lines.append(f"  价格在10日线{pos10} {abs(rel10):.1f}%（MA10={report.ma10:.3f}）")
 
         lines.append("")
-
-        # 2. 震荡与超买（RSI / 布林带）
         lines.append("**2. 震荡与超买（RSI / 布林带）**")
         rsi_desc = {
             "超买": "处于超买区，短期回调压力大",
@@ -941,8 +928,6 @@ class TechnicalAnalyzer:
             lines.append(f"  带宽 {report.boll_width:.1f}%（{'震荡加剧' if report.boll_width > 8 else '相对收窄'}）")
 
         lines.append("")
-
-        # 3. 动能与背离（MACD / 量能）
         lines.append("**3. 动能（MACD / 量能）**")
         macd_desc = {
             "金叉": "MACD 金叉，上涨动能启动",
@@ -963,10 +948,8 @@ class TechnicalAnalyzer:
         else:
             vr_desc = f"量比 {vr:.2f}，成交平稳"
         lines.append(f"  {vr_desc}")
-
         lines.append("")
 
-        # 4. 支撑与压力
         lines.append("**4. 支撑与压力（关键价位）**")
         if report.support_s1 > 0 or report.support_s2 > 0:
             sup_parts = []
@@ -979,10 +962,13 @@ class TechnicalAnalyzer:
             if report.resistance_r2 > 0: res_parts.append(f"R2={report.resistance_r2:.3f}")
             lines.append("  短期压力：" + " → ".join(res_parts))
         lines.append(f"  ATR（14日）：{report.atr_14:.4f}，波动性 {report.volatility}")
-
         lines.append("")
+        return lines
 
-        # ── 三、是否适合买入（结论）──
+    @staticmethod
+    def _format_tail_parts(report: TechnicalReport) -> list[str]:
+        lines = []
+        conclusion = TechnicalAnalyzer.get_conclusion(report.score)
         lines.append("**三、综合评估与操作建议**")
         score_label_map = {
             "强势看多": ("当前技术面偏强，可考虑轻仓介入或持仓", "空仓可在支撑位分批建仓；持仓可持有，跌破S2止损"),
@@ -1000,7 +986,30 @@ class TechnicalAnalyzer:
             lines.append("")
             lines.append("**四、基本面与风险评价（AI分析）**")
             lines.append(report.llm_fundamental_analysis)
+        return lines
 
+    @staticmethod
+    def format_report(report: TechnicalReport) -> str:
+        """完整版报告（用于 ETF）"""
+        lines = TechnicalAnalyzer._format_header_and_quotes(report)
+        lines.extend(TechnicalAnalyzer._format_tech_details(report))
+        lines.extend(TechnicalAnalyzer._format_tail_parts(report))
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_main_report(report: TechnicalReport) -> str:
+        """核心版报告（用于股票主推）"""
+        lines = TechnicalAnalyzer._format_header_and_quotes(report)
+        lines.extend(TechnicalAnalyzer._format_tail_parts(report))
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_tech_report(report: TechnicalReport) -> str:
+        """技术指标专门报告（用于股票副推）"""
+        _ts = report.timestamp
+        now_str = f"{_ts.year}年{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
+        lines = [f"**{report.name}（{report.symbol}）** — 纯技术指标解析 ({now_str})\n"]
+        lines.extend(TechnicalAnalyzer._format_tech_details(report))
         return "\n".join(lines)
     @staticmethod
     def format_signal(signal: AlertSignal) -> str:
