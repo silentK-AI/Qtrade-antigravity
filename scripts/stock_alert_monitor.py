@@ -490,11 +490,11 @@ class StockAlertMonitor:
         if stock_reports:
             logger.info(f"推送股票盘前核心报告 ({len(stock_reports)} 只标的)")
             stock_main_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True, report_type="main")
-            self._notifier.notify_premarket_report(stock_main_content, is_stock=True)
+            self._notifier.notify_premarket_report(stock_main_content, is_stock=True, title="📊 股票 | 盘前核心分析")
             
             logger.info(f"推送股票关键技术指标报告 ({len(stock_reports)} 只标的)")
             stock_tech_content = self._format_premarket_content(stock_reports, sentiment, is_stock=True, report_type="tech")
-            self._notifier.notify_premarket_report(stock_tech_content, is_stock=True)
+            self._notifier.notify_premarket_report(stock_tech_content, is_stock=True, title="📉 股票 | 关键技术指标分析")
             
         # 推送 ETF 部分
         if etf_reports:

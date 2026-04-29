@@ -96,13 +96,16 @@ class Notifier:
         """发送日报"""
         self.send("[日报] ETF T+0 交易日报", report)
 
-    def notify_premarket_report(self, content: str, is_stock: bool = True) -> None:
+    def notify_premarket_report(self, content: str, is_stock: bool = True, title: str = None) -> None:
         """发送盘前技术分析报告"""
         from datetime import datetime
         date_str = datetime.now().strftime("%Y-%m-%d")
         title_type = "股票" if is_stock else "ETF"
-        title = f"📊 {title_type} | 盘前技术分析 | {date_str}"
-        self.send(title, content)
+        if title:
+            final_title = f"{title} | {date_str}"
+        else:
+            final_title = f"📊 {title_type} | 关键技术指标分析 | {date_str}"
+        self.send(final_title, content)
 
     def notify_close_report(self, content: str) -> None:
         """发送盘后回测报告"""
