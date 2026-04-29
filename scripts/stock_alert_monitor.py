@@ -123,18 +123,31 @@ class StockAlertMonitor:
     # ------------------------------------------------------------------
 
     def _load_history_data(self):
-        """拉取所有标的的历史 K 线数据"""
+        """拉取所有标的的历史 K 线数据（并行化提高速度）"""
         logger.info("=== 拉取历史 K 线数据 ===")
-        for symbol, cfg in STOCK_ALERT_SYMBOLS.items():
-            logger.info(f"  拉取 [{symbol} {cfg['name']}] ...")
-            df = self._data_service.fetch_history_klines(symbol, days=ALERT_HISTORY_DAYS)
-            if df is not None and not df.empty:
-                self._klines_cache[symbol] = df
-                logger.info(f"  [{symbol}] 获取 {len(df)} 天 K 线")
-            else:
-                logger.warning(f"  [{symbol}] 获取 K 线失败")
-            # 每个标的之间间隔 1.5 秒，避免 akshare 连接被拒
-            time.sleep(1.5)
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        self._klines_cache.clear()
+        
+        def _fetch_single(symbol, cfg):
+            try:
+                # logger.debug(f"  拉取 [{symbol} {cfg['name']}] ...")
+                df = self._data_service.fetch_history_klines(symbol, days=ALERT_HISTORY_DAYS)
+                return symbol, df
+            except Exception as e:
+                logger.error(f"  [{symbol}] 拉取异常: {e}")
+                return symbol, None
+
+        # 使用 5 个线程并发拉取，兼顾速度与稳定性
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_sym = {executor.submit(_fetch_single, sym, cfg): sym for sym, cfg in STOCK_ALERT_SYMBOLS.items()}
+            for future in as_completed(future_to_sym):
+                symbol, df = future.result()
+                if df is not None and not df.empty:
+                    self._klines_cache[symbol] = df
+                    # logger.info(f"  [{symbol}] 获取 {len(df)} 天 K 线")
+                else:
+                    logger.warning(f"  [{symbol}] 获取 K 线失败")
 
         logger.info(f"历史数据加载完成: {len(self._klines_cache)}/{len(STOCK_ALERT_SYMBOLS)} 只成功")
 

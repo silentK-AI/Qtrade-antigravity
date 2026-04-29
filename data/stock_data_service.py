@@ -779,11 +779,11 @@ class StockDataService:
                                 sentiment.fear_greed_label = label
                                 logger.debug(f"[韭圈儿] 恐贪指数: {idx} ({label})")
                                 return
-                except Exception as e:
-                    logger.debug(f"韭圈儿 session 尝试失败: {e}")
+                except Exception:
+                    # 韭圈儿直连/代理尝试失败是预期内的网络波动，静默处理
                     continue
-        except Exception as e:
-            logger.debug(f"韭圈儿恐贪指数失败: {e}")
+        except Exception:
+            pass
 
         # --- 源2: alternative.me（走系统代理，无代理环境会失败，有兜底）---
         try:
@@ -807,8 +807,8 @@ class StockDataService:
                         sentiment.fear_greed_label = label + "(全球)"
                         logger.debug(f"[alternative.me] 恐贪指数: {idx} ({label})")
                         return
-        except Exception as e:
-            logger.debug(f"alternative.me 恐贪指数失败: {e}")
+        except Exception:
+            pass
 
         # --- 源3: 基于大盘技术面估算（兜底，始终可用）---
         try:
