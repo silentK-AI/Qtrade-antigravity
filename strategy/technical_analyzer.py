@@ -82,7 +82,8 @@ class TechnicalReport:
     # 量价关系
     volume_ratio: float = 1.0     # 量比（当日/5日均量）
 
-    # 当日高低价
+    # 当日开高低收
+    today_open: float = 0.0
     day_high: float = 0.0
     day_low: float = 0.0
 

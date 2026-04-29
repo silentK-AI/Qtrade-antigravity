@@ -445,6 +445,8 @@ class StockAlertMonitor:
 
             if report:
                 if quote and quote.is_valid:
+                    if hasattr(quote, 'open') and quote.open > 0:
+                        report.today_open = round(quote.open, 3)
                     if quote.high > 0:
                         report.day_high = round(quote.high, 3)
                     if quote.low > 0:
@@ -595,9 +597,19 @@ class StockAlertMonitor:
         for report in ordered:
             if report.pred_high > 0 and report.pred_low > 0:
                 r2_pct = int(report.pred_confidence * 100)
+                anchor = report.today_open if report.today_open > 0 else (report.prev_close if report.prev_close > 0 else report.price)
+                if anchor > 0:
+                    high_pct = (report.pred_high - anchor) / anchor * 100
+                    low_pct = (report.pred_low - anchor) / anchor * 100
+                else:
+                    high_pct = 0.0
+                    low_pct = 0.0
+                
+                open_str = f"开{report.today_open:.2f}" if report.today_open > 0 else "开盘未知"
                 pred_lines.append(
                     f"  **{report.name}**({report.symbol}): "
-                    f"高 `{report.pred_high:.3f}` / 低 `{report.pred_low:.3f}` "
+                    f"{open_str} / 高 `{report.pred_high:.3f}` ({high_pct:+.2f}%) / "
+                    f"低 `{report.pred_low:.3f}` ({low_pct:+.2f}%) "
                     f"波动 {report.pred_range_pct:.1f}% R²={r2_pct}%"
                 )
 
