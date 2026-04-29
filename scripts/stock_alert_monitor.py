@@ -625,7 +625,7 @@ class StockAlertMonitor:
                     )
 
             if pred_lines:
-                sections.append("### 🤖 XGBoost 次日价格预测")
+                sections.append("### 🤖 XGBoost 今日价格波动预测")
                 sections.append("\n\n".join(pred_lines))
                 sections.append("\n---\n")
 

@@ -845,13 +845,19 @@ class TechnicalAnalyzer:
             f"{conclusion}",
         ]
 
-        if report.pred_high > 0 and report.pred_low > 0 and report.price > 0:
+        # 使用开盘价作为预测涨跌的锚定点（避免盘后运行由于收盘价上涨导致的假性偏空）
+        anchor = report.today_open if report.today_open > 0 else report.price
+        
+        if report.pred_high > 0 and report.pred_low > 0 and anchor > 0:
             mid = (report.pred_high + report.pred_low) / 2
-            pred_dir_pct = (mid - report.price) / report.price * 100
+            pred_dir_pct = (mid - anchor) / anchor * 100
+            
+            # 如果是盘中或盘后运行，说明是预测“今日”；如果是盘前运行，则是预测“今日”
+            # 为避免歧义，统一改为“今日预测”
             if pred_dir_pct > 0:
-                pred_color = f"**🔴 预测明日偏多 +{pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
+                pred_color = f"**🔴 今日预测偏多 +{pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
             else:
-                pred_color = f"**🟢 预测明日偏空 {pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
+                pred_color = f"**🟢 今日预测偏空 {pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
             lines.append(pred_color)
 
         lines.append("")
