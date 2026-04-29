@@ -97,6 +97,7 @@ class TradingEngine:
         self._position_manager = PositionManager(initial_capital)
         self._risk_manager = RiskManager(self._position_manager)
         self._overnight_loaded = False
+        self._ml_predictions_generated = False
 
         # 交易数据持久化
         self._trade_store = TradeStore()
@@ -162,6 +163,7 @@ class TradingEngine:
         self._position_manager.reset_daily()
         self._overnight_service.reset_daily()
         self._overnight_loaded = False
+        self._ml_predictions_generated = False
 
         self._running = True
         scan_count = 0
@@ -178,6 +180,15 @@ class TradingEngine:
                 if current_time < market_open:
                     if not self._overnight_loaded:
                         self._load_overnight_data()
+
+                    # 9:25 到 9:30 之间允许获取行情快照以提前生成 ML 预测，但跳过实际交易逻辑
+                    auction_end_time = dtime(9, 25)
+                    if current_time >= auction_end_time:
+                        if not self._ml_predictions_generated:
+                            snapshots = self._data_service.get_all_snapshots(self._etf_codes)
+                            if snapshots:
+                                self._try_generate_predictions(snapshots)
+                    
                     if scan_count == 0:
                         logger.info(f"等待开盘（{MARKET_OPEN}）...")
                     time.sleep(10)
@@ -390,13 +401,30 @@ class TradingEngine:
         else:
             logger.warning("未获取到隔夜数据，策略将仅依赖日内信号")
 
-        # ML 策略：生成当日预测
-        if self._ml_predictor and self._ml_strategy:
-            self._generate_ml_predictions(overnight_map or {})
-
         self._overnight_loaded = True
 
-    def _generate_ml_predictions(self, overnight_map: dict) -> None:
+    def _try_generate_predictions(self, snapshots: dict) -> None:
+        """尝试在开盘前（9:25后）生成预测，需确保获取到了开盘价"""
+        if not self._ml_predictor or not self._ml_strategy:
+            self._ml_predictions_generated = True
+            return
+
+        # 检查是否所有活跃标的都获得了有效的开盘价
+        all_ready = True
+        for code in self._etf_codes:
+            snap = snapshots.get(code)
+            # 如果配置了 ML 模型但快照中没有有效的开盘价，则说明还没出集合竞价结果
+            if self._ml_predictor.has_model(code):
+                if snap is None or snap.etf_open <= 0:
+                    all_ready = False
+                    break
+
+        if all_ready:
+            overnight_map = self._overnight_service.get_all_overnight_info() or {}
+            self._generate_ml_predictions(snapshots, overnight_map)
+            self._ml_predictions_generated = True
+
+    def _generate_ml_predictions(self, snapshots: dict, overnight_map: dict) -> None:
         """使用 ML 模型生成当日价格预测并计算 PP 点位"""
         from strategy.ml_predictor import PricePrediction
         predictions = {}
@@ -405,6 +433,12 @@ class TradingEngine:
         for code in self._etf_codes:
             if not self._ml_predictor.has_model(code):
                 continue
+
+            snap = snapshots.get(code)
+            if not snap or snap.etf_open <= 0:
+                continue
+            
+            current_open = snap.etf_open
 
             try:
                 # 获取最近 30 天历史数据用于特征构建
@@ -431,11 +465,11 @@ class TradingEngine:
 
                 # --- 运行 ML 模型 ---
                 overnight_info = overnight_map.get(code)
-                pred = self._ml_predictor.predict(code, overnight_info, hist_df)
+                pred = self._ml_predictor.predict(code, overnight_info, hist_df, current_open)
                 if pred:
-                    # 预测是相对比率，转为绝对价格
-                    pred.predicted_high *= prev_close
-                    pred.predicted_low *= prev_close
+                    # 预测是相对于开盘价的比率，转为绝对价格
+                    pred.predicted_high *= current_open
+                    pred.predicted_low *= current_open
                     predictions[code] = pred
 
             except Exception as e:

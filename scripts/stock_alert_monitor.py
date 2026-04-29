@@ -343,8 +343,22 @@ class StockAlertMonitor:
             logger.info(f"等待盘前报告时间 {ALERT_PREMARKET_TIME}，还需 {wait_sec} 秒...")
             time.sleep(min(wait_sec, 30))
 
-        # 获取实时行情（9:25后拿到开盘价）
-        quotes = self._data_service.fetch_realtime_quotes()
+        # 增加轮询机制，确保各路数据源已更新当天的开盘价 (open > 0)
+        logger.info("已到达 9:25 集合竞价结束时间，开始轮询等待各路行情更新开盘价...")
+        quotes = {}
+        for attempt in range(12):  # 最多等待 60 秒
+            # 清理缓存以强制重新获取
+            self._data_service._cache.clear()
+            quotes = self._data_service.fetch_realtime_quotes()
+            # 统计有多少标的获得了有效的开盘价
+            valid_opens = sum(1 for sym, q in quotes.items() if q.open > 0)
+            
+            if valid_opens == len(STOCK_ALERT_SYMBOLS):
+                logger.info(f"成功获取到全部 {valid_opens} 个标的的开盘价，停止轮询。")
+                break
+            
+            logger.info(f"尝试 {attempt+1}/12: 仅获取到 {valid_opens} 个开盘价，等待 5 秒后重试...")
+            time.sleep(5)
 
         # 获取市场情绪
         sentiment = self._data_service.fetch_market_sentiment()

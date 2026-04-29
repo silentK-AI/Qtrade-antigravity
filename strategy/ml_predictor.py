@@ -54,6 +54,8 @@ class MLPredictor:
     FEATURE_NAMES = [
         # ---- 隔夜 (1) ----
         "overnight_change_pct",       # 隔夜涨跌幅 (代表全部隔夜信息)
+        # ---- 当日开盘 (1) ----
+        "open_gap_pct",               # 当日开盘跳空幅度
         # ---- 前日 K 线形态 (3) ----
         "prev_return",                # 前日涨跌幅 (日动量)
         "prev_close_position",        # 收盘在 high-low 中的位置 (K线重心)
@@ -123,6 +125,7 @@ class MLPredictor:
         etf_code: str,
         overnight_info: Optional[OvernightInfo],
         hist_df: pd.DataFrame,
+        current_open: Optional[float] = None,
     ) -> Optional[PricePrediction]:
         """
         预测次日最高价和最低价。
@@ -132,6 +135,7 @@ class MLPredictor:
             overnight_info: 隔夜行情信息（可为 None）
             hist_df:        至少 15 日的 OHLCV 历史 DataFrame
                            需包含列: 开盘, 最高, 最低, 收盘, 成交量
+            current_open:   预测日的开盘价 (必须提供才能生成准确预测)
 
         Returns:
             PricePrediction 或 None（预测失败时）
@@ -139,7 +143,11 @@ class MLPredictor:
         if not self.has_model(etf_code):
             return None
 
-        features = self.build_features(overnight_info, hist_df)
+        if current_open is None or current_open <= 0:
+            logger.warning(f"[{etf_code}] 未提供有效的开盘价，无法生成 ML 预测")
+            return None
+
+        features = self.build_features(overnight_info, hist_df, current_open)
         if features is None:
             return None
 
@@ -205,18 +213,18 @@ class MLPredictor:
                 # 隔夜信息
                 ov = overnight_series[i] if overnight_series and i < len(overnight_series) else None
 
-                features = self.build_features(ov, window_df)
+                # 预测目标：下一天的最高价和最低价（相对于下一天的开盘价）
+                next_row = hist_df.iloc[i + 1]
+                current_open = float(next_row["开盘"])
+                if current_open <= 0:
+                    continue
+
+                features = self.build_features(ov, window_df, current_open)
                 if features is None:
                     continue
 
-                # 预测目标：下一天的最高价和最低价（相对于当日收盘的比率）
-                next_row = hist_df.iloc[i + 1]
-                current_close = float(hist_df.iloc[i]["收盘"])
-                if current_close <= 0:
-                    continue
-
-                target_high = float(next_row["最高"]) / current_close
-                target_low = float(next_row["最低"]) / current_close
+                target_high = float(next_row["最高"]) / current_open
+                target_low = float(next_row["最低"]) / current_open
 
                 X_list.append(features)
                 y_high_list.append(target_high)
@@ -300,16 +308,18 @@ class MLPredictor:
         self,
         overnight_info: Optional[OvernightInfo],
         hist_df: pd.DataFrame,
+        current_open: Optional[float] = None,
     ) -> Optional[np.ndarray]:
         """
-        构建 12 维独立特征向量。
+        构建 13 维独立特征向量。
 
         Args:
             overnight_info: 隔夜行情信息
             hist_df:        至少 15 行的 OHLCV 历史数据
+            current_open:   当日的开盘价
 
         Returns:
-            特征向量 (shape: [12,]) 或 None
+            特征向量 (shape: [13,]) 或 None
         """
         if len(hist_df) < 15:
             return None
@@ -349,11 +359,18 @@ class MLPredictor:
             else:
                 features.append(0.0)
 
-            # 2. prev_return — 前日涨跌幅 (%)
+            # 2. open_gap_pct — 当日开盘跳空幅度
+            if current_open is not None and prev_close > 0:
+                open_gap_pct = (current_open - prev_close) / prev_close * 100
+            else:
+                open_gap_pct = 0.0
+            features.append(open_gap_pct)
+
+            # 3. prev_return — 前日涨跌幅 (%)
             prev_return = (prev_close - prev2_close) / prev2_close * 100 if prev2_close > 0 else 0
             features.append(prev_return)
 
-            # 3. prev_close_position — 收盘在 high-low 中的位置 (0~1)
+            # 4. prev_close_position — 收盘在 high-low 中的位置 (0~1)
             close_pos = (prev_close - prev_low) / hl_range if hl_range > 0 else 0.5
             features.append(close_pos)
 
