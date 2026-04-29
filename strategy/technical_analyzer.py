@@ -851,49 +851,65 @@ class TechnicalAnalyzer:
         return base
 
     @staticmethod
+    def _get_progress_bar(percent: float, length: int = 10) -> str:
+        """生成字符进度条 [████░░░░░░]"""
+        percent = max(0.0, min(100.0, percent))
+        filled_len = int(length * percent / 100)
+        bar = "█" * filled_len + "░" * (length - filled_len)
+        return f"[{bar}] {percent:.0f}%"
+
+    @staticmethod
+    def _format_price(price: float) -> str:
+        """根据价格高低自动适配精度"""
+        if price < 2.0:
+            return f"{price:.3f}"
+        return f"{price:.2f}"
+
+    @staticmethod
     def _format_header_and_quotes(report: TechnicalReport) -> list[str]:
         _ts = report.timestamp
-        now_str = f"{_ts.year}年{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
+        now_str = f"{_ts.month}月{_ts.day}日 {_ts.strftime('%H:%M')}"
         change_icon = "📉" if report.change_pct < 0 else "📈" if report.change_pct > 0 else "➡️"
         conclusion = TechnicalAnalyzer.get_conclusion(report)
 
         lines = [
-            f"**{report.name}（{report.symbol}）** — 截至 {now_str}",
-            f"{conclusion}",
+            f"### 💎 {report.name} ({report.symbol})",
+            f"> **结论：{conclusion}**",
+            "",
         ]
 
-        # 使用开盘价作为预测涨跌的锚定点（避免盘后运行由于收盘价上涨导致的假性偏空）
+        # 1. 机器学习预测
         anchor = report.today_open if report.today_open > 0 else report.price
-        
         if report.pred_high > 0 and report.pred_low > 0 and anchor > 0:
             mid = (report.pred_high + report.pred_low) / 2
             pred_dir_pct = (mid - anchor) / anchor * 100
+            pred_icon = "🔴" if pred_dir_pct > 0 else "🟢"
+            pred_word = "预测看多" if pred_dir_pct > 0 else "预测看空"
             
-            # 如果是盘中或盘后运行，说明是预测“今日”；如果是盘前运行，则是预测“今日”
-            # 为避免歧义，统一改为“今日预测”
-            if pred_dir_pct > 0:
-                pred_color = f"**🔴 今日预测偏多 +{pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
-            else:
-                pred_color = f"**🟢 今日预测偏空 {pred_dir_pct:.2f}%**（高 {report.pred_high:.3f} / 低 {report.pred_low:.3f}）"
-            lines.append(pred_color)
+            lines.append(f"{pred_icon} **今日预测：{pred_word} ({pred_dir_pct:+.2f}%)**")
+            lines.append(f"  预测区间: `{TechnicalAnalyzer._format_price(report.pred_low)}` ~ `{TechnicalAnalyzer._format_price(report.pred_high)}`")
+            lines.append("")
 
-        lines.append("")
-        lines.append(f"**一、核心行情**")
+        # 2. 核心行情 (表格化)
         chg_str = f"{report.change_pct:+.2f}%"
-        lines.append(f"股价：{report.price:.3f} 元，当日 **{chg_str}** {change_icon}")
-        if report.day_high > 0 and report.day_low > 0:
-            lines.append(f"当日最高 {report.day_high:.3f} 元 / 最低 {report.day_low:.3f} 元")
+        price_str = TechnicalAnalyzer._format_price(report.price)
+        
+        lines.append("| 指标 | 当前数据 |")
+        lines.append("| :--- | :--- |")
+        lines.append(f"| **当前股价** | `{price_str}` ({chg_str} {change_icon}) |")
+        if report.day_high > 0:
+            lines.append(f"| **当日高/低** | {TechnicalAnalyzer._format_price(report.day_high)} / {TechnicalAnalyzer._format_price(report.day_low)} |")
+        
+        if report.net_flow_valid:
+            flow_word = "净流入" if report.net_flow_main > 0 else "净流出"
+            lines.append(f"| **主力资金** | {abs(report.net_flow_main):.2f} 亿 ({flow_word}) |")
 
         ret_parts = []
-        if report.ret_10d != 0: ret_parts.append(f"近10日 {report.ret_10d:+.1f}%")
-        if report.ret_60d != 0: ret_parts.append(f"近3月 {report.ret_60d:+.1f}%")
-        if report.ret_250d != 0: ret_parts.append(f"近1年 {report.ret_250d:+.1f}%")
-        if ret_parts: lines.append("区间涨跌：" + " | ".join(ret_parts))
-
-        if report.net_flow_valid:
-            flow_icon = "📥" if report.net_flow_main > 0 else "📤"
-            flow_word = "净流入" if report.net_flow_main > 0 else "净流出"
-            lines.append(f"主力资金：{flow_icon} {flow_word} {abs(report.net_flow_main):.2f} 亿元")
+        if report.ret_10d != 0: ret_parts.append(f"10日 {report.ret_10d:+.1f}%")
+        if report.ret_60d != 0: ret_parts.append(f"3月 {report.ret_60d:+.1f}%")
+        if ret_parts:
+            lines.append(f"| **历史表现** | {' / '.join(ret_parts)} |")
+        
         lines.append("")
         return lines
 
@@ -901,90 +917,62 @@ class TechnicalAnalyzer:
     def _format_tech_details(report: TechnicalReport) -> list[str]:
         lines = []
         lines.append(f"**二、关键技术指标（日线）**")
+        
+        # 1. 均线趋势
         lines.append(f"**1. 趋势与均线**")
         ma_parts = []
-        if report.ma5 > 0:   ma_parts.append(f"MA5={report.ma5:.3f}{report.ma5_trend}")
-        if report.ma10 > 0:  ma_parts.append(f"MA10={report.ma10:.3f}{report.ma10_trend}")
-        if report.ma20 > 0:  ma_parts.append(f"MA20={report.ma20:.3f}{report.ma20_trend}")
-        if report.ma60 > 0:  ma_parts.append(f"MA60={report.ma60:.3f}")
-        if report.ma120 > 0: ma_parts.append(f"MA120={report.ma120:.3f}")
-        if report.ma250 > 0: ma_parts.append(f"MA250={report.ma250:.3f}")
+        for p in [5, 10, 20]:
+            val = getattr(report, f"ma{p}")
+            trend = getattr(report, f"ma{p}_trend", "")
+            if val > 0:
+                ma_parts.append(f"MA{p}:`{TechnicalAnalyzer._format_price(val)}`{trend}")
         if ma_parts:
             lines.append("  " + "  ".join(ma_parts))
 
         if report.ma5 > 0 and report.ma10 > 0 and report.ma20 > 0:
             if report.ma5 > report.ma10 > report.ma20:
-                lines.append("  多头排列（MA5>MA10>MA20），中期上升趋势延续")
+                trend_desc = "🟢 多头排列，处于上升通道"
             elif report.ma5 < report.ma10 < report.ma20:
-                lines.append("  空头排列（MA5<MA10<MA20），中期下降趋势")
+                trend_desc = "🔴 空头排列，处于下行通道"
             else:
-                lines.append("  均线交织，趋势不明朗，震荡格局")
+                trend_desc = "🟡 均线交织，震荡筑底中"
+            lines.append(f"  状态: {trend_desc}")
 
-        if report.ma5 > 0:
-            rel5 = (report.price - report.ma5) / report.ma5 * 100
-            pos5 = "上方" if rel5 > 0 else "下方"
-            lines.append(f"  价格在5日线{pos5} {abs(rel5):.1f}%（MA5={report.ma5:.3f}）")
-        if report.ma10 > 0:
-            rel10 = (report.price - report.ma10) / report.ma10 * 100
-            pos10 = "上方" if rel10 > 0 else "下方"
-            lines.append(f"  价格在10日线{pos10} {abs(rel10):.1f}%（MA10={report.ma10:.3f}）")
-
+        # 2. 震荡指标
         lines.append("")
-        lines.append("**2. 震荡与超买（RSI / 布林带）**")
-        rsi_desc = {
-            "超买": "处于超买区，短期回调压力大",
-            "偏强": "偏强，仍在多头区间",
-            "中性": "中性区间，多空均衡",
-            "偏弱": "偏弱，关注能否企稳",
-            "超卖": "超卖区，存在超跌反弹机会",
-        }.get(report.rsi_status, "")
-        lines.append(f"  RSI（14日）：{report.rsi_14:.1f} — {rsi_desc}")
+        lines.append("**2. 震荡与位置**")
+        rsi_bar = TechnicalAnalyzer._get_progress_bar(report.rsi_14)
+        lines.append(f"  RSI (14D): `{report.rsi_14:.1f}` {rsi_bar}")
+        
         if report.boll_upper > 0:
-            boll_pos = (report.price - report.boll_lower) / (report.boll_upper - report.boll_lower) * 100 if (report.boll_upper - report.boll_lower) > 0 else 50
-            if boll_pos >= 80:
-                boll_desc = "接近上轨，注意超买风险"
-            elif boll_pos <= 20:
-                boll_desc = "接近下轨，关注超跌支撑"
-            else:
-                boll_desc = f"处于带内中性区域（位置 {boll_pos:.0f}%）"
-            lines.append(f"  布林带：上轨 {report.boll_upper:.3f} / 中轨 {report.boll_middle:.3f} / 下轨 {report.boll_lower:.3f}，{boll_desc}")
-            lines.append(f"  带宽 {report.boll_width:.1f}%（{'震荡加剧' if report.boll_width > 8 else '相对收窄'}）")
+            boll_range = report.boll_upper - report.boll_lower
+            boll_pos = (report.price - report.boll_lower) / boll_range * 100 if boll_range > 0 else 50
+            boll_bar = TechnicalAnalyzer._get_progress_bar(boll_pos)
+            lines.append(f"  布林位置: `{boll_pos:.0f}%` {boll_bar}")
 
+        # 3. 支撑压力
         lines.append("")
-        lines.append("**3. 动能（MACD / 量能）**")
-        macd_desc = {
-            "金叉": "MACD 金叉，上涨动能启动",
-            "多头": "MACD 多头区间，红柱持续",
-            "死叉": "MACD 死叉，下跌动能释放",
-            "空头": "MACD 空头区间，注意风险",
-            "中性": "MACD 零轴附近，方向待定",
-        }.get(report.macd_status, "")
-        lines.append(f"  MACD：DIF={report.macd_dif:.4f} DEA={report.macd_dea:.4f} 柱={report.macd_hist:.4f}")
-        lines.append(f"  {macd_desc}")
-        vr = report.volume_ratio
-        if vr > 2.0:
-            vr_desc = f"量比 {vr:.2f}，明显放量，多空分歧加大"
-        elif vr > 1.2:
-            vr_desc = f"量比 {vr:.2f}，温和放量，关注方向确认"
-        elif vr < 0.6:
-            vr_desc = f"量比 {vr:.2f}，明显缩量，观望情绪浓"
-        else:
-            vr_desc = f"量比 {vr:.2f}，成交平稳"
-        lines.append(f"  {vr_desc}")
-        lines.append("")
+        lines.append("**3. 支撑与压力**")
+        
+        def _get_dist(target, current):
+            if target <= 0 or current <= 0: return ""
+            pct = (target - current) / current * 100
+            return f"({pct:+.1f}%)"
 
-        lines.append("**4. 支撑与压力（关键价位）**")
-        if report.support_s1 > 0 or report.support_s2 > 0:
-            sup_parts = []
-            if report.support_s1 > 0: sup_parts.append(f"S1={report.support_s1:.3f}")
-            if report.support_s2 > 0: sup_parts.append(f"S2={report.support_s2:.3f}")
-            lines.append("  短期支撑：" + " → ".join(sup_parts))
-        if report.resistance_r1 > 0 or report.resistance_r2 > 0:
-            res_parts = []
-            if report.resistance_r1 > 0: res_parts.append(f"R1={report.resistance_r1:.3f}")
-            if report.resistance_r2 > 0: res_parts.append(f"R2={report.resistance_r2:.3f}")
-            lines.append("  短期压力：" + " → ".join(res_parts))
-        lines.append(f"  ATR（14日）：{report.atr_14:.4f}，波动性 {report.volatility}")
+        if report.resistance_r1 > 0:
+            dist = _get_dist(report.resistance_r1, report.price)
+            lines.append(f"  阻力 R1: `{TechnicalAnalyzer._format_price(report.resistance_r1)}` {dist}")
+        if report.support_s1 > 0:
+            dist = _get_dist(report.support_s1, report.price)
+            lines.append(f"  支撑 S1: `{TechnicalAnalyzer._format_price(report.support_s1)}` {dist}")
+        
+        # 4. 动能
+        lines.append("")
+        lines.append("**4. 动能与成交量**")
+        macd_icon = "📈" if report.macd_hist > 0 else "📉"
+        lines.append(f"  MACD: {macd_icon} 柱状线 `{report.macd_hist:.4f}` ({report.macd_status})")
+        lines.append(f"  量比: `{report.volume_ratio:.2f}` ({'放量' if report.volume_ratio > 1.2 else '缩量' if report.volume_ratio < 0.7 else '平稳'})")
+        
         lines.append("")
         return lines
 
