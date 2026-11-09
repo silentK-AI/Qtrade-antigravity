@@ -90,8 +90,9 @@ class Snapshot1458:
     closing_seal_amount: float     # 14:58 涨停板封单排队资金（元）
     seal_to_float_ratio: float     # 封单占流通市值千分比 (‰)
     day_open_board_count: int      # 全天炸板次数（0次代表金身不破）
-    first_seal_time: str           # 早盘首次封板时间（如 "09:36"）
+    first_seal_time: str           # 首次封板时间（如 "09:36:00"）
     continuous_board_count: int = 1# 当前连板高度（如 1板、2板）
+    last_seal_time: str = ""       # 最后封板时间（如 "14:55:23"）
 
 
 @dataclass

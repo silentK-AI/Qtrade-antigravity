@@ -124,22 +124,35 @@ class ServerDaemonScheduler:
     def _get_1458_candidates(self):
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=150)
+                zt_details = self.data_provider.fetch_today_zt_pool_details()
                 if quotes:
                     candidates = []
                     for q in quotes:
-                        if not (8.5 <= q.change_pct <= 10.5):
+                        if not (5.5 <= q.change_pct <= 10.5):
                             continue
+                        detail = zt_details.get(q.code, {})
+                        fbt = detail.get("first_seal_time", "09:30:00" if q.change_pct >= 9.8 else "未封板")
+                        lbt = detail.get("last_seal_time", fbt)
+                        zbc = detail.get("open_board_count", 0)
+                        fund = detail.get("seal_amount", max(q.amount * 0.05, 30000000.0))
+                        lbc = detail.get("continuous_boards", 1)
+
+                        is_lu = (q.change_pct >= 9.8)
+                        float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 5000000000.0
+                        seal_ratio = (fund / float_cap * 1000.0) if float_cap > 0 else 5.0
+
                         snap = Snapshot1458(
                             code=q.code,
                             indicative_price=q.current_price,
                             indicative_change_pct=q.change_pct,
-                            is_limit_up=(q.change_pct >= 9.8),
-                            closing_seal_amount=max(q.amount * 0.05, 30000000.0),
-                            seal_to_float_ratio=15.0,
-                            day_open_board_count=0 if q.low_price >= q.open_price else 1,
-                            first_seal_time="14:35",
-                            continuous_board_count=1
+                            is_limit_up=is_lu,
+                            closing_seal_amount=fund,
+                            seal_to_float_ratio=seal_ratio,
+                            day_open_board_count=zbc,
+                            first_seal_time=fbt,
+                            continuous_board_count=lbc,
+                            last_seal_time=lbt
                         )
                         candidates.append((q, snap))
                     if candidates:

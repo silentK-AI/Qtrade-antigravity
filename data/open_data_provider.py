@@ -268,3 +268,41 @@ class OpenDataProvider:
         except Exception:
             return 2 if is_today_limit_up else 1
 
+    def fetch_today_zt_pool_details(self) -> Dict[str, Dict[str, Any]]:
+        """
+        调用东财官方今日实时涨停池接口，获取每只股票的首次封板时间、最后封板时间、炸板次数、封单金额与连板数
+        """
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        url = (
+            f"https://push2ex.eastmoney.com/getTopicZTPool?"
+            f"ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date={today}"
+        )
+        try:
+            content = self._get_url_content(url)
+            data = json.loads(content)
+            pool = data.get("data", {}).get("pool", [])
+            details = {}
+            for item in pool:
+                code = str(item.get("c", "")).strip()
+                if not code:
+                    continue
+                fbt_raw = str(item.get("fbt", 0)).zfill(6)
+                lbt_raw = str(item.get("lbt", 0)).zfill(6)
+                fbt = f"{fbt_raw[:2]}:{fbt_raw[2:4]}:{fbt_raw[4:]}"
+                lbt = f"{lbt_raw[:2]}:{lbt_raw[2:4]}:{lbt_raw[4:]}"
+                zbc = int(item.get("zbc", 0) or 0)
+                fund = float(item.get("fund", 0) or 0.0)
+                lbc = int(item.get("lbc", 1) or 1)
+                details[code] = {
+                    "first_seal_time": fbt,
+                    "last_seal_time": lbt,
+                    "open_board_count": zbc,
+                    "seal_amount": fund,
+                    "continuous_boards": lbc
+                }
+            return details
+        except Exception as e:
+            print(f"[数据源错误] 获取今日涨停池明细失败: {e}")
+            return {}
+

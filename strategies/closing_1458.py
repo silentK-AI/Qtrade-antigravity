@@ -35,30 +35,43 @@ class Closing1458Screener(BaseScreener):
         seal_wan = snap.closing_seal_amount / 10000.0
         seal_ratio = snap.seal_to_float_ratio
         first_time = snap.first_seal_time
+        last_time = getattr(snap, "last_seal_time", "") or first_time
+        zbc = snap.day_open_board_count
 
         # -----------------------------------------------------------------
-        # 场景一：早盘极早封死 (<=10:00) 且封单上亿 —— 绝对买不进去！
+        # 场景一：早盘极早封死 (首次封板 <= 10:30，且无炸板或早早回封) —— 绝对买不进去！
         # -----------------------------------------------------------------
-        if snap.is_limit_up and first_time <= "10:30" and (seal_wan >= 5000.0 or seal_ratio >= 6.0):
-            factors["【可买入性】"] = "❌ 队列已堵死！前面积压巨量封单，14:58挂单100%买不进去"
+        if snap.is_limit_up and (first_time <= "10:30" and (zbc == 0 or last_time <= "11:30")):
+            factors["【可买入性】"] = f"❌ 队列已堵死！早盘 {first_time} 已封死，排单过厚，14:58挂单买不进"
             factors["【实战定位】"] = "板块情绪定海神针 / 持筹者锁仓标杆"
-            factors["【资金】排队封单规模"] = f"排队封单 {seal_wan:.0f} 万元 (占流通盘 {seal_ratio:.2f}‰)"
+            factors["【资金】排队封单规模"] = f"封单 {seal_wan:.0f} 万元 (首次封板: {first_time})"
             pattern = "【龙头风向标·买不进】铁板锁仓"
-            action = "【14:58已封死·买不进去！】若早盘已持有，则坚决锁仓一股不卖，次日坐等连板"
-            expectation = "绝对核心领涨龙头，次日高概率一字板或秒板，为同板块蓄势股打开高度空间。"
+            action = "【早盘已封死·14:58买不进！】若早盘已持有，则坚决锁仓一股不卖，次日坐等连板"
+            expectation = "绝对核心领涨龙头，早盘即封死，次日高概率高开或秒板，为后排打开高度空间。"
             return 98.0, 60.0, pattern, factors, action, expectation
 
         # -----------------------------------------------------------------
-        # 场景二：尾盘刚封板回封 (14:30 以后封板，换手充分，能排进成交！)
+        # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板时间 >= 14:00，或盘中炸板多次尾盘压哨回封)
         # -----------------------------------------------------------------
-        elif snap.is_limit_up and first_time >= "14:20":
-            factors["【可买入性】"] = "✅ 能够买进！尾盘刚刚封死，前面封单不厚且盘中有抛盘成交，排单成交率高"
-            factors["【资金承接】"] = f"尾盘集合竞价扫单 {seal_wan:.0f} 万元，多头尾盘突袭锁单"
+        elif snap.is_limit_up and (last_time >= "14:00" or first_time >= "14:00" or (zbc >= 1 and last_time >= "13:30")):
+            factors["【可买入性】"] = f"✅ 能够买进！最后回封时间为 {last_time} (盘中炸板 {zbc} 次)，抛盘充分换手，排单成交率高"
+            factors["【资金承接】"] = f"尾盘排单 {seal_wan:.0f} 万元，多头尾盘突袭锁单"
             factors["【换手硬度】"] = f"全天充分换手 {quote.turnover_rate:.1f}%，筹码洗净"
             pattern = "【尾盘回封·能买进】分歧转一致次日连板"
             action = "【14:58立即挂涨停价委托】排队进入收盘集合竞价，预计大概率能成交！"
             expectation = "尾盘经受分歧后顽强回封，浮筹已在盘中洗尽，次日享受弱转强高开连板溢价。"
             return 92.0, 52.0, pattern, factors, action, expectation
+
+        # -----------------------------------------------------------------
+        # 场景三：其他时间段平稳封死的主板标的 (买入概率低)
+        # -----------------------------------------------------------------
+        elif snap.is_limit_up:
+            factors["【可买入性】"] = f"⚠️ 封板时间 {first_time}，封单较厚，14:58 成交概率较低"
+            factors["【资金规模】"] = f"封单 {seal_wan:.0f} 万元"
+            pattern = "【日内封板·排单难成】"
+            action = "【14:58挂单成交率偏低】建议作为次日观察标的，不建议强行排单"
+            expectation = "日内平稳封板，重点观察次日竞价承接情况。"
+            return 86.0, 48.0, pattern, factors, action, expectation
 
         # -----------------------------------------------------------------
         # 场景三：尾盘放量蓄势冲板未遂 (+5.5% ~ +8.8%，100%市价秒买进！)
