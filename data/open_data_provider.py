@@ -7,7 +7,7 @@
 import json
 import urllib.request
 import urllib.parse
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from models.stock_item import StockQuote
 from utils.filters import StockFilter
 
@@ -180,3 +180,91 @@ class OpenDataProvider:
             return quotes
         except Exception:
             return []
+
+    def fetch_yesterday_limit_up_pool(self) -> List[Dict[str, Any]]:
+        """
+        抓取东方财富【昨日涨停板】(BK0815) 全部成分股在今日的实际表现
+        严格按沪深主板过滤，提取：代码、名称、现价、涨跌幅、最高涨幅、最低跌幅、换手、成交额、连板数等
+        """
+        url = (
+            "https://push2.eastmoney.com/api/qt/clist/get?"
+            "pn=1&pz=150&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+            "&fltt=2&invt=2&fid=f3&fs=b:BK0815"
+            "&fields=f12,f14,f2,f3,f15,f16,f17,f18,f8,f6,f21"
+        )
+        try:
+            content = self._get_url_content(url)
+            data = json.loads(content)
+            diff = data.get("data", {}).get("diff", [])
+            items = []
+            for d in diff:
+                code = str(d.get("f12", "")).strip()
+                name = str(d.get("f14", "")).strip()
+                if not self.filter.is_main_board_code(code) or not self.filter.is_valid_name(name):
+                    continue
+
+                curr_price = float(d.get("f2", 0.0) or 0.0)
+                pre_close = float(d.get("f18", 0.0) or 0.0)
+                if pre_close <= 0:
+                    continue
+
+                close_pct = float(d.get("f3", 0.0) or 0.0)
+                high_price = float(d.get("f15", 0.0) or curr_price)
+                low_price = float(d.get("f16", 0.0) or curr_price)
+                high_pct = (high_price - pre_close) / pre_close * 100
+                low_pct = (low_price - pre_close) / pre_close * 100
+                turnover = float(d.get("f8", 0.0) or 0.0)
+                amount_yi = float(d.get("f6", 0.0) or 0.0) / 100000000
+                float_cap_yi = float(d.get("f21", 0.0) or 0.0) / 100000000
+
+                limit_up_price = round(pre_close * 1.10, 2)
+                is_today_limit_up = (curr_price >= limit_up_price - 0.01) or (close_pct >= 9.90)
+
+                items.append({
+                    "code": code,
+                    "name": name,
+                    "close_price": curr_price,
+                    "pre_close": pre_close,
+                    "close_pct": close_pct,
+                    "high_pct": high_pct,
+                    "low_pct": low_pct,
+                    "turnover_rate": turnover,
+                    "amount_yi": amount_yi,
+                    "float_cap_yi": float_cap_yi,
+                    "is_today_limit_up": is_today_limit_up
+                })
+            return items
+        except Exception as e:
+            print(f"[数据源错误] 抓取昨日涨停池失败: {e}")
+            return []
+
+    def get_consecutive_board_count(self, code: str, is_today_limit_up: bool) -> int:
+        """
+        通过日K线历史收盘涨幅精准计算该股当前的真实连板数
+        """
+        secid = f"0.{code}" if code.startswith("0") else f"1.{code}"
+        url = (
+            f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+            f"secid={secid}&fields1=f1&fields2=f51,f53,f59&klt=101&fqt=1&end=20500101&lmt=10"
+        )
+        try:
+            content = self._get_url_content(url)
+            data = json.loads(content)
+            klines = data.get("data", {}).get("klines", [])
+            if not klines:
+                return 2 if is_today_limit_up else 1
+
+            count = 0
+            # klines: 日期,收盘价,涨跌幅
+            for k in reversed(klines):
+                parts = k.split(",")
+                if len(parts) >= 3:
+                    pct = float(parts[2])
+                    if pct >= 9.85:
+                        count += 1
+                    else:
+                        break
+            return max(count, 2 if is_today_limit_up else 1)
+        except Exception:
+            return 2 if is_today_limit_up else 1
+

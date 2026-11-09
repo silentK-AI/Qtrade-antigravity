@@ -113,6 +113,16 @@ class SentimentConfig:
 
 
 @dataclass
+class PostMarketReportConfig:
+    """15:10 盘后涨停复盘与次日打板预案配置"""
+    TRIGGER_TIME: str = "15:10:05"        # 触发时间（15:10分准时生成推送）
+    MAX_DISPLAY_ITEMS: int = 40           # 最多展示个股数
+    PROMOTION_RATE_ALERT: float = 0.35    # 晋级率低于 35% 判定为退潮预警
+    HIGH_BOARD_ALERT: int = 4             # 4板及以上高标提示分歧风险
+
+
+
+@dataclass
 class WeChatNotifyConfig:
     """微信通知推送配置 - 优先自动读取服务器现有环境变量与 .env 配置"""
     # 自动探测环境变量中已配置的 Token，如果有则默认启用

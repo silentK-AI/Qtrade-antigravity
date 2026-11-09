@@ -109,3 +109,38 @@ class StrategySignal:
     suggested_action: str          # 建议买入方式（如 "竞价挂单市价委托" / "回踩均线分批建仓"）
     stop_loss_price: float         # 建议防守止损价
     next_day_expectation: str      # 次日涨停预期与逻辑说明
+
+
+@dataclass
+class YesterdayLimitUpItem:
+    """昨日涨停股票今日表现复盘与次日预案数据项"""
+    code: str
+    name: str
+    close_price: float             # 今日收盘价
+    close_pct: float               # 今日收盘涨跌幅 (%)
+    high_pct: float                # 今日最高涨幅 (%)
+    low_pct: float                 # 今日最低跌幅 (%)
+    turnover_rate: float           # 今日换手率 (%)
+    amount_yi: float               # 今日成交额（亿元）
+    float_cap_yi: float            # 流通市值（亿元）
+    consecutive_boards: int        # 连板数 (若今日涨停: 2, 3, 4...；若未涨停: 1 代表昨日首板断板)
+    is_today_limit_up: bool        # 今日是否继续涨停
+    board_status: str              # 连板状态备注 (如 "【3连板·主线龙头】"、"【断板冲高回落】")
+    next_day_action: str           # 第二天是否打板建议 (如 "【强势连板·次日可打板】"、"【禁止接盘·观望】")
+    detail_reason: str             # 逻辑分析与操作要点
+
+
+@dataclass
+class PostMarketReportData:
+    """15:10 盘后涨停复盘综合统计数据"""
+    report_time: str               # 报告生成时间
+    total_yesterday_count: int     # 昨日主板涨停总数
+    today_continue_count: int      # 今日成功连板家数
+    broken_board_count: int        # 今日断板家数
+    advancement_rate: float        # 今日晋级率 (%)
+    highest_board: int             # 市场最高连板高度
+    highest_board_stock: str       # 最高连板龙头标的 (代码+名称)
+    tier_distribution: Dict[int, int] # 连板梯队分布 (如 {3: 1, 2: 12})
+    sentiment_summary: str         # 明日打板总基调与行情定位
+    items: List[YesterdayLimitUpItem] = field(default_factory=list)
+

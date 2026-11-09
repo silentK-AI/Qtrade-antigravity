@@ -12,7 +12,7 @@ import urllib.request
 import urllib.parse
 from typing import List, Dict, Any, Optional
 from config import WeChatNotifyConfig
-from models.stock_item import StrategySignal
+from models.stock_item import StrategySignal, PostMarketReportData
 
 
 class WeChatPusher:
@@ -167,3 +167,70 @@ class WeChatPusher:
         else:
             print(f"[微信推送提示] 未能成功推送，请检查 config.py 中的 Token 或 Key 配置。")
         return success
+
+    def format_post_market_report(self, r: PostMarketReportData) -> str:
+        """格式化适合微信手机阅读的 15:10 盘后涨停复盘与次日预案报告"""
+        lines = []
+        lines.append(f"### 📋【15:10 盘后涨停复盘与次日打板预案】\n")
+        lines.append(f"> **生成时间**: {r.report_time} | **主板昨日涨停**: **{r.total_yesterday_count}** 家")
+        lines.append(f"> **今日连板晋级**: <font color=\"#e74c3c\">**{r.today_continue_count}**</font> 家 | **断板**: {r.broken_board_count} 家 | **晋级率: {r.advancement_rate:.1f}%**")
+        lines.append(f"> **最高连板高度**: **{r.highest_board_stock}**")
+        
+        # 梯队分布
+        if r.tier_distribution:
+            tier_str = " | ".join([f"{k}板 ({v}只)" for k, v in sorted(r.tier_distribution.items(), reverse=True)])
+            lines.append(f"> **连板梯队**: {tier_str}")
+        lines.append(f"> **明日打板总基调**: {r.sentiment_summary}\n")
+        lines.append("---\n")
+
+        # 区分连板组与断板组
+        continue_items = [x for x in r.items if x.is_today_limit_up]
+        broken_items = [x for x in r.items if not x.is_today_limit_up]
+
+        if continue_items:
+            lines.append(f"#### 🚀 【连板晋级池】(共 {len(continue_items)} 只·重点观察接力)\n")
+            for idx, item in enumerate(continue_items, 1):
+                lines.append(f"**{idx}. {item.name} ({item.code})** —— {item.board_status}")
+                lines.append(f"- **今日表现**: 收盘 **{item.close_price:.2f}元** ({item.close_pct:+.2f}%) | 最高: **{item.high_pct:+.2f}%** | 最低: **{item.low_pct:+.2f}%**")
+                lines.append(f"- **量能特征**: 换手率 **{item.turnover_rate:.1f}%** | 成交额 **{item.amount_yi:.1f}亿**")
+                lines.append(f"- **次日打板建议**: <font color=\"#e67e22\">**{item.next_day_action}**</font>")
+                lines.append(f"- **预案要点**: {item.detail_reason}\n")
+
+        if broken_items:
+            lines.append(f"#### ⚠️ 【断板分歧池】(精选前排·区分反包与风险)\n")
+            for idx, item in enumerate(broken_items[:15], 1): # 选取最具代表性的断板标的
+                lines.append(f"**{idx}. {item.name} ({item.code})** —— {item.board_status}")
+                lines.append(f"- **今日表现**: 收盘 **{item.close_price:.2f}元** ({item.close_pct:+.2f}%) | 最高: **{item.high_pct:+.2f}%** | 最低: **{item.low_pct:+.2f}%**")
+                lines.append(f"- **次日打板建议**: <font color=\"#2980b9\">**{item.next_day_action}**</font>")
+                lines.append(f"- **预案要点**: {item.detail_reason}\n")
+
+        lines.append("\n*注：15:10 盘后自动清算复盘，打板交易有风险，严格遵守仓位纪律*")
+        return "\n".join(lines)
+
+    def push_post_market_report(self, report: PostMarketReportData) -> bool:
+        """推送 15:10 盘后涨停复盘与次日预案至微信"""
+        title = f"📋【15:10 盘后涨停复盘】今日晋级率{report.advancement_rate:.1f}%，最高{report.highest_board}板"
+        if not self.config.ENABLED:
+            print("[微信推送] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
+            return False
+
+        markdown_body = self.format_post_market_report(report)
+        channel = self.config.CHANNEL.lower()
+        success = False
+
+        if channel == "pushplus":
+            success = self.send_pushplus(title, markdown_body)
+        elif channel == "serverchan":
+            success = self.send_serverchan(title, markdown_body)
+        elif channel == "wecom":
+            success = self.send_wecom(title, markdown_body)
+        else:
+            print(f"[微信推送] 未知通道: {channel}")
+            return False
+
+        if success:
+            print(f"[微信推送成功] 盘后复盘报告已成功送达微信！")
+        else:
+            print(f"[微信推送提示] 盘后复盘推送未能送达，请检查网络或Token。")
+        return success
+

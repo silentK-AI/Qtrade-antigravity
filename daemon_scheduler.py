@@ -21,6 +21,7 @@ from strategies.morning_auction import MorningAuctionScreener
 from strategies.closing_stage import ClosingStageScreener
 from strategies.closing_1458 import Closing1458Screener
 from strategies.market_sentiment import MarketSentimentAnalyzer
+from strategies.post_market_report import PostMarketReportScreener
 
 
 class ServerDaemonScheduler:
@@ -93,6 +94,11 @@ class ServerDaemonScheduler:
             signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
             self.pusher.push(signals, title, sentiment)
 
+        elif task_type == "1510":
+            screener = PostMarketReportScreener()
+            report_data = screener.run_report()
+            self.pusher.push_post_market_report(report_data)
+
     def test_wechat_push(self):
         """测试微信推送连通性"""
         print("[测试模式] 正在向配置的微信通道发送测试卡片...")
@@ -102,7 +108,7 @@ class ServerDaemonScheduler:
         """启动守护主循环"""
         print("=" * 80)
         print("   A股打板量化策略系统 - 服务器后台自动化守护进程已启动")
-        print("   监控目标时间节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 (交易日)")
+        print("   监控目标时间节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 | 15:10:05 (交易日)")
         print(f"   微信推送配置通道: {self.pusher.config.CHANNEL} (开启状态: {self.pusher.config.ENABLED})")
         print("=" * 80)
 
@@ -150,6 +156,12 @@ class ServerDaemonScheduler:
                     self.execute_and_push("1458")
                     executed_today.add("1458")
 
+            # 5. 15:10:05 触发 15:10 盘后涨停复盘与次日预案
+            elif current_hm == "15:10" and "1510" not in executed_today:
+                if now.second >= 5:
+                    self.execute_and_push("1510")
+                    executed_today.add("1510")
+
             # 每次循环休眠 3 秒，低 CPU 占用且不错过时间节点
             time.sleep(3)
 
@@ -157,6 +169,7 @@ class ServerDaemonScheduler:
 def main():
     parser = argparse.ArgumentParser(description="A股打板量化调度服务 - 服务器后台与微信推送")
     parser.add_argument("--test-push", action="store_true", help="立即向微信发送一条测试选股卡片")
+    parser.add_argument("--post-market", action="store_true", help="立即生成并向微信推送 15:10 盘后涨停复盘与次日打板预案报告")
     parser.add_argument("--source", choices=["live", "mock"], default="mock", help="数据源 (live/mock)")
     args = parser.parse_args()
 
@@ -164,6 +177,8 @@ def main():
 
     if args.test_push:
         scheduler.test_wechat_push()
+    elif args.post_market:
+        scheduler.execute_and_push("1510")
     else:
         scheduler.run_daemon()
 
