@@ -121,16 +121,13 @@ class WeChatNotifyConfig:
             os.getenv("PUSHPLUS_TOKEN")
             or os.getenv("PUSH_PLUS_TOKEN")
             or os.getenv("PUSH_TOKEN")
-            or ""
+            or "f82973cf1342485fa7114d4f888fbbe2"
         )
     )
-    # 如果检测到环境变量中有 Token，则自动置为 True，无需手动改配置
+    # 默认开启微信推送
     ENABLED: bool = field(
-        default_factory=lambda: bool(
-            os.getenv("PUSHPLUS_TOKEN")
-            or os.getenv("PUSH_PLUS_TOKEN")
-            or os.getenv("PUSH_TOKEN")
-            or os.getenv("NOTIFY_ENABLED") == "true"
+        default_factory=lambda: (
+            os.getenv("NOTIFY_ENABLED", "true").lower() != "false"
         )
     )
     CHANNEL: str = "pushplus"
