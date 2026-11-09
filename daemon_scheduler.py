@@ -11,6 +11,7 @@ import sys
 import time
 import argparse
 from datetime import datetime, timedelta
+from typing import List, Tuple, Dict, Any, Optional
 
 from config import WeChatNotifyConfig
 from notifications.wechat_pusher import WeChatPusher

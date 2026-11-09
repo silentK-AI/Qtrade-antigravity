@@ -41,12 +41,12 @@ class WeChatPusher:
             )
             lines.append(f"> **主线题材**: {sentiment.get('top_theme', '全市场轮动')}\n")
 
-        # 2. 候选标的列表
+        # 2. 候选标的列表（精选评分最高的前8只标的，兼顾手机阅读与通道字数限制）
         if not signals:
             lines.append("当前时段未筛选出符合评分阈值（综合>=80且资金充沛）的确定性标的，建议防守观望。")
             return "\n".join(lines)
 
-        for idx, s in enumerate(signals, 1):
+        for idx, s in enumerate(signals[:8], 1):
             lines.append(f"#### **{idx}. {s.name} ({s.code})** —— {s.target_pattern}")
             lines.append(f"- **现价/涨幅**: **{s.current_price:.2f}元** ({s.change_pct:+.2f}%)")
             lines.append(f"- **综合评分**: **{s.score:.1f}分** | **资金得分: {s.capital_score:.1f}分**")
@@ -85,6 +85,8 @@ class WeChatPusher:
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
+                if result.get("code") != 200:
+                    print(f"[微信推送失败] PushPlus 接口返回: {result}")
                 return result.get("code") == 200
         except Exception as e:
             print(f"[微信推送异常] PushPlus 发送失败: {e}")
