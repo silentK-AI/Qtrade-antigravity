@@ -52,20 +52,56 @@ class LimitUpModule:
         self.sentiment_analyzer = MarketSentimentAnalyzer()
         self.data_provider = OpenDataProvider()
 
+    def _get_dataset_and_sentiment(self, task_type: str):
+        """统一获取指定时段数据集与情绪指标"""
+        if self.source == "live":
+            from daemon_scheduler import ServerDaemonScheduler
+            scheduler = ServerDaemonScheduler(source="live")
+            if task_type == "0923":
+                dataset = scheduler._get_0923_candidates()
+            elif task_type == "0925":
+                dataset = scheduler._get_0925_candidates()
+            elif task_type == "1450":
+                dataset = scheduler._get_1450_candidates()
+            elif task_type == "1458":
+                dataset = scheduler._get_1458_candidates()
+            else:
+                dataset = []
+            quotes = [q for q, _ in dataset] if dataset else None
+            sentiment = scheduler._get_live_or_fallback_sentiment(quotes)
+            return dataset, sentiment
+        else:
+            if task_type == "0923":
+                dataset = MockReplayProvider.get_0923_dataset()
+                top_theme = "西部大开发 / 算力主线"
+            elif task_type == "0925":
+                dataset = MockReplayProvider.get_morning_auction_dataset()
+                top_theme = "低空经济 / 算力协同"
+            elif task_type == "1450":
+                dataset = MockReplayProvider.get_closing_stage_dataset()
+                top_theme = "高端制造 / 商业航天"
+            else:
+                dataset = MockReplayProvider.get_1458_dataset()
+                top_theme = "创新药 / 新质生产力"
+
+            sentiment = {
+                "status": "活跃/做多周期",
+                "limit_up_count": 38,
+                "exploded_ratio": 12.5,
+                "highest_continuous_board": 5,
+                "top_theme": top_theme,
+                "sentiment_multiplier": 1.05
+            }
+            return dataset, sentiment
+
     def run_0923(self, push: bool = True) -> List[StrategySignal]:
         """
         【09:23 关键时钟】早盘不可撤单竞价抢筹锁定（全天封死 + 次日涨停）
         """
         screener = Auction0923Screener()
-        dataset = MockReplayProvider.get_0923_dataset()
-        sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 35,
-            "exploded_ratio": 12.5,
-            "highest_continuous_board": 5,
-            "top_theme": "西部大开发 / 算力主线"
-        }
-        signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+        dataset, sentiment = self._get_dataset_and_sentiment("0923")
+        multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+        signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
             title = "🔔【09:23 早盘抢筹锁板精选】(全天封死+次日涨停)"
@@ -78,15 +114,9 @@ class LimitUpModule:
         【09:25:05 关键时钟】早盘开盘竞价打板精选
         """
         screener = MorningAuctionScreener()
-        dataset = MockReplayProvider.get_morning_auction_dataset()
-        sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 38,
-            "exploded_ratio": 13.6,
-            "highest_continuous_board": 5,
-            "top_theme": "低空经济 / 算力协同"
-        }
-        signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+        dataset, sentiment = self._get_dataset_and_sentiment("0925")
+        multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+        signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
             title = "🚀【09:25 开盘竞价打板精选】"
@@ -99,15 +129,9 @@ class LimitUpModule:
         【14:50:00 关键时钟】尾盘异动放量蓄势冲板精选
         """
         screener = ClosingStageScreener()
-        dataset = MockReplayProvider.get_closing_stage_dataset()
-        sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 42,
-            "exploded_ratio": 16.0,
-            "highest_continuous_board": 5,
-            "top_theme": "高端制造 / 商业航天"
-        }
-        signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+        dataset, sentiment = self._get_dataset_and_sentiment("1450")
+        multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+        signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
             title = "📊【14:50 尾盘蓄势冲板精选】"
@@ -120,15 +144,9 @@ class LimitUpModule:
         【14:58:00 关键时钟】尾盘集合竞价锁定（次日大概率涨停，区分可买入与锁仓标的）
         """
         screener = Closing1458Screener()
-        dataset = MockReplayProvider.get_1458_dataset()
-        sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 45,
-            "exploded_ratio": 11.0,
-            "highest_continuous_board": 6,
-            "top_theme": "创新药 / 新质生产力"
-        }
-        signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+        dataset, sentiment = self._get_dataset_and_sentiment("1458")
+        multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+        signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
             title = "🎯【14:58 尾盘竞价锁定】(锁定次日大概率涨停)"

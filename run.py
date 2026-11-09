@@ -59,7 +59,17 @@ def run_0923_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "09:23 不可撤单真实封板池 (锁定全天封死+次日连板)")
     else:
         print("  正在从实时行情接口获取 09:23 不可撤单买一封单及盘口...")
-        run_0923_mode(source="mock")
+        from daemon_scheduler import ServerDaemonScheduler
+        scheduler = ServerDaemonScheduler(source="live")
+        dataset = scheduler._get_0923_candidates()
+        quotes = [q for q, _ in dataset] if dataset else None
+        sentiment = scheduler._get_live_or_fallback_sentiment(quotes)
+        TerminalVisualizer.print_sentiment_summary(sentiment)
+        signals = screener.run_strategy(
+            candidates=dataset,
+            sentiment_multiplier=float(sentiment["sentiment_multiplier"])
+        )
+        TerminalVisualizer.print_signals_table(signals, "09:23 不可撤单实时封板池 (锁定全天封死+次日连板)")
 
 
 def run_1458_mode(source: str = "mock", codes_filter: list = None):
@@ -92,7 +102,17 @@ def run_1458_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "14:58 尾盘竞价锁定池 (次日大概率涨停)")
     else:
         print("  正在从实时行情接口获取 14:58 收盘集合竞价盘口与封单...")
-        run_1458_mode(source="mock")
+        from daemon_scheduler import ServerDaemonScheduler
+        scheduler = ServerDaemonScheduler(source="live")
+        dataset = scheduler._get_1458_candidates()
+        quotes = [q for q, _ in dataset] if dataset else None
+        sentiment = scheduler._get_live_or_fallback_sentiment(quotes)
+        TerminalVisualizer.print_sentiment_summary(sentiment)
+        signals = screener.run_strategy(
+            candidates=dataset,
+            sentiment_multiplier=float(sentiment["sentiment_multiplier"])
+        )
+        TerminalVisualizer.print_signals_table(signals, "14:58 尾盘竞价实时锁定池 (次日大概率涨停)")
 
 
 def run_morning_mode(source: str = "mock", codes_filter: list = None):

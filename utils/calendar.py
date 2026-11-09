@@ -6,8 +6,19 @@ A 股交易日历与法定节假日休市判定模块
 3. 支持动态扩展与交易日判定。
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from typing import Set, Optional
+
+
+def get_beijing_now() -> datetime:
+    """
+    获取标准的北京时间 (UTC+8，无时区偏差的本地 datetime 表现形式)
+    彻底消除 Linux 云服务器系统时区配置为 UTC/GMT 导致的时钟判断失灵
+    """
+    tz_beijing = timezone(timedelta(hours=8))
+    utc_now = datetime.now(timezone.utc)
+    beijing_dt = utc_now.astimezone(tz_beijing)
+    return beijing_dt.replace(tzinfo=None)
 
 
 class TradeCalendar:
@@ -60,7 +71,7 @@ class TradeCalendar:
         2. 不能是法定节假日休市日。
         """
         if dt is None:
-            dt = datetime.now()
+            dt = get_beijing_now()
 
         # 1. 周末必休 (A 股周末无交易，即使国家假日调休补班，股市亦休市)
         if dt.weekday() >= 5:

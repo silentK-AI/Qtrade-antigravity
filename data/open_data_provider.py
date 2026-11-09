@@ -249,7 +249,7 @@ class OpenDataProvider:
                 })
             return items
         except Exception as e:
-            print(f"[数据源错误] 抓取昨日涨停池失败: {e}")
+            logger.warning(f"抓取昨日涨停池失败: {e}")
             return []
 
     def get_consecutive_board_count(self, code: str, is_today_limit_up: bool) -> int:

@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from models.stock_item import YesterdayLimitUpItem, PostMarketReportData
 from config import PostMarketReportConfig
 from data.open_data_provider import OpenDataProvider
+from utils.calendar import get_beijing_now
 
 
 class PostMarketReportScreener:
@@ -151,6 +152,16 @@ class PostMarketReportScreener:
         if raw_items is None:
             raw_items = self.provider.fetch_yesterday_limit_up_pool()
 
+        # 性能提速优化：批量从今日涨停池预取准确连板数，消除逐个个股串行发起数十次K线网络请求的延迟
+        try:
+            today_zt_pool = self.provider.fetch_today_zt_pool_details()
+            for raw in raw_items:
+                code = raw.get("code")
+                if code in today_zt_pool and raw.get("is_today_limit_up"):
+                    raw["consecutive_boards"] = int(today_zt_pool[code].get("continuous_boards", 2) or 2)
+        except Exception:
+            pass
+
         analyzed_items: List[YesterdayLimitUpItem] = []
         for raw in raw_items:
             item = self.analyze_item(raw)
@@ -191,7 +202,7 @@ class PostMarketReportScreener:
             sentiment_summary = "❄️【冰点退潮期】晋级率偏低、大面亏损效应扩散，明日严格控仓防守，严禁盲目追高打板！"
 
         return PostMarketReportData(
-            report_time=datetime.now().strftime("%Y-%m-%d 15:10"),
+            report_time=get_beijing_now().strftime("%Y-%m-%d 15:10"),
             total_yesterday_count=total_count,
             today_continue_count=continue_count,
             broken_board_count=broken_count,

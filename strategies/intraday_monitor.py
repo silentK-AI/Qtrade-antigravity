@@ -13,6 +13,7 @@ from models.stock_item import IntradayEvent
 from utils.filters import StockFilter
 from data.open_data_provider import OpenDataProvider
 from utils.logger import get_logger
+from utils.calendar import get_beijing_now
 
 logger = get_logger("intraday_monitor")
 
@@ -57,7 +58,7 @@ class IntradayMonitor:
             return []
 
         events: List[IntradayEvent] = []
-        now_time_str = datetime.now().strftime("%H:%M:%S")
+        now_time_str = get_beijing_now().strftime("%H:%M:%S")
 
         # -------------------------------------------------------------
         # 1. 检查【涨停封板】异动
@@ -176,6 +177,12 @@ class IntradayMonitor:
         seal_time: str
     ) -> Tuple[str, str]:
         """输出涨停封板买入建议与原因"""
+        # 一字开盘封死处理 (竞价一字板，排单通道封死)
+        if seal_time <= "09:25:00" and zbc == 0:
+            advice = "【建议：一字涨停·排队买不进/持股锁仓】"
+            reason = f"集合竞价直接巨单封死一字涨停，封单高达 {fund_wan:.0f} 万元堵死队列，无法挂单成交，持有者锁仓继续享受连板溢价。"
+            return advice, reason
+
         if is_reseal:
             advice = "【建议：可轻仓打板/博烂板出妖】"
             reason = f"日内炸板 {zbc} 次后顽强回封，浮筹已在盘中充分换手换血，大单回封锁单 {fund_wan:.0f} 万元，次日享受弱转强高开溢价。"

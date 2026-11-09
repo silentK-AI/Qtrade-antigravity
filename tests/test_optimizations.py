@@ -8,6 +8,7 @@
 5. 09:25 开盘集合竞价实盘数据流。
 """
 
+import os
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -97,6 +98,87 @@ class TestSystemOptimizations(unittest.TestCase):
         scheduler = ServerDaemonScheduler(source="mock")
         candidates = scheduler._get_0925_candidates()
         self.assertTrue(len(candidates) > 0)
+
+    def test_beijing_time_utils(self):
+        """测试北京时间转换函数"""
+        from utils.calendar import get_beijing_now
+        bj_now = get_beijing_now()
+        self.assertIsInstance(bj_now, datetime)
+        self.assertIsNone(bj_now.tzinfo)
+
+    def test_signal_history_tracker_record_and_evaluate(self):
+        """测试策略推荐历史记录与战绩评估"""
+        import tempfile
+        from data.history_tracker import SignalHistoryTracker
+        from models.stock_item import StrategySignal
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            temp_path = f.name
+
+        try:
+            tracker = SignalHistoryTracker(file_path=temp_path)
+            sig = StrategySignal(
+                code="600519",
+                name="贵州茅台",
+                strategy_type="14:58尾盘实战选股",
+                score=92.0,
+                capital_score=52.0,
+                current_price=1750.0,
+                change_pct=9.9,
+                target_pattern="【尾盘回封·能买进】",
+                key_factors={},
+                suggested_action="买入",
+                stop_loss_price=1700.0,
+                next_day_expectation="冲高"
+            )
+            # 记录昨天的信号
+            tracker.record_signals(task_type="1458", signals=[sig], date_str="2026-11-08")
+
+            # 模拟今天拉取评测
+            mock_provider = MagicMock()
+            mock_provider.fetch_realtime_quotes.return_value = [
+                StockQuote(
+                    code="600519",
+                    name="贵州茅台",
+                    market="SH",
+                    current_price=1925.0,
+                    pre_close=1750.0,
+                    open_price=1800.0,
+                    high_price=1925.0,
+                    low_price=1780.0,
+                    change_pct=10.0,
+                    volume=5000000.0,
+                    amount=9500000000.0,
+                    turnover_rate=1.8,
+                    float_market_cap=22000.0,
+                    total_market_cap=22000.0,
+                    is_limit_up=True
+                )
+            ]
+
+            evaluation = tracker.evaluate_recent_signals(mock_provider, today_str="2026-11-09")
+            self.assertIsNotNone(evaluation)
+            self.assertEqual(evaluation["total_count"], 1)
+            self.assertEqual(evaluation["zt_count"], 1)
+            self.assertEqual(evaluation["win_rate"], 100.0)
+            self.assertAlmostEqual(evaluation["avg_max_gain"], 10.0, places=1)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def test_intraday_yiziban_advice(self):
+        """测试集合竞价一字板输出持股锁仓建议"""
+        from strategies.intraday_monitor import IntradayMonitor
+        monitor = IntradayMonitor()
+        advice, reason = monitor._generate_limit_up_advice(
+            lbc=2,
+            fund_wan=8000.0,
+            zbc=0,
+            is_reseal=False,
+            seal_time="09:25:00"
+        )
+        self.assertIn("一字涨停", advice)
+        self.assertIn("买不进", advice)
 
 
 if __name__ == "__main__":

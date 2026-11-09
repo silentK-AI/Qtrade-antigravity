@@ -238,7 +238,11 @@ class WeChatPusher:
         markdown_body = self.format_markdown_message(signals, title, sentiment)
         return self._dispatch_push(title, markdown_body, log_tag="策略信号推送")
 
-    def format_post_market_report(self, r: PostMarketReportData) -> str:
+    def format_post_market_report(
+        self,
+        r: PostMarketReportData,
+        history_eval: Optional[Dict[str, Any]] = None
+    ) -> str:
         """格式化适合微信手机阅读的 15:10 盘后涨停复盘与次日预案报告"""
         lines = []
         lines.append(f"### 📋【15:10 盘后涨停复盘与次日打板预案】\n")
@@ -251,6 +255,26 @@ class WeChatPusher:
             tier_str = " | ".join([f"{k}板 ({v}只)" for k, v in sorted(r.tier_distribution.items(), reverse=True)])
             lines.append(f"> **连板梯队**: {tier_str}")
         lines.append(f"> **明日打板总基调**: {r.sentiment_summary}\n")
+
+        # 系统自建策略实战跟踪战绩（闭环验证）
+        if history_eval and history_eval.get("total_count", 0) > 0:
+            lines.append("---\n")
+            lines.append(f"#### 🎯 【系统前日策略战绩闭环追踪】(推荐日: {history_eval['record_date']})")
+            lines.append(
+                f"> **推荐跟踪**: 共 **{history_eval['total_count']}** 只 | "
+                f"今日封死涨停: <font color=\"#e74c3c\">**{history_eval['zt_count']}** 只 ({history_eval['zt_rate']:.1f}%)</font> | "
+                f"收红胜率: **{history_eval['win_rate']:.1f}%**"
+            )
+            lines.append(f"> **日内冲高**: 候选股平均最高冲高 **+{history_eval['avg_max_gain']:.1f}%**")
+            lines.append("- **个股实战核验**:")
+            for item in history_eval.get("items", [])[:5]:
+                status_tag = "<font color=\"#e74c3c\">【涨停封死 ✅】</font>" if item["is_limit_up"] else f"最高 +{item['max_gain']:.1f}%"
+                lines.append(
+                    f"  - **{item['name']} ({item['code']})** [{item['rec_time']}]: "
+                    f"收盘 **{item['today_close']:.2f}元** ({item['today_pct']:+.2f}%) —— {status_tag}"
+                )
+            lines.append("")
+
         lines.append("---\n")
 
         # 区分连板组与断板组
@@ -277,10 +301,14 @@ class WeChatPusher:
         lines.append("\n*注：15:10 盘后自动清算复盘，打板交易有风险，严格遵守仓位纪律*")
         return "\n".join(lines)
 
-    def push_post_market_report(self, report: PostMarketReportData) -> bool:
-        """推送 15:10 盘后涨停复盘与次日预案至微信"""
+    def push_post_market_report(
+        self,
+        report: PostMarketReportData,
+        history_eval: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """推送 15:10 盘后涨停复盘与次日预案至微信（支持实战战绩追踪）"""
         title = f"📋【15:10 盘后涨停复盘】今日晋级率{report.advancement_rate:.1f}%，最高{report.highest_board}板"
-        markdown_body = self.format_post_market_report(report)
+        markdown_body = self.format_post_market_report(report, history_eval=history_eval)
         return self._dispatch_push(title, markdown_body, log_tag="盘后复盘推送")
 
     def format_intraday_events(self, events: List[IntradayEvent]) -> Tuple[str, str]:

@@ -26,8 +26,9 @@ from strategies.closing_1458 import Closing1458Screener
 from strategies.market_sentiment import MarketSentimentAnalyzer
 from strategies.post_market_report import PostMarketReportScreener
 from strategies.intraday_monitor import IntradayMonitor
-from utils.calendar import TradeCalendar
+from utils.calendar import TradeCalendar, get_beijing_now
 from utils.logger import get_logger
+from data.history_tracker import SignalHistoryTracker
 
 logger = get_logger("daemon_scheduler")
 
@@ -42,6 +43,7 @@ class ServerDaemonScheduler:
         self.data_provider = OpenDataProvider()
         self.snapshot_0919: Dict[str, Any] = {}
         self.intraday_monitor = IntradayMonitor(self.data_provider)
+        self.history_tracker = SignalHistoryTracker()
         self.last_intraday_poll_ts: float = 0.0
         self.is_running: bool = True
 
@@ -230,7 +232,7 @@ class ServerDaemonScheduler:
 
     def execute_and_push(self, task_type: str):
         """执行指定时段策略并推送微信"""
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = get_beijing_now().strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"触发定时量化任务: 【{task_type}】...")
 
         if task_type == "0923":
@@ -242,6 +244,8 @@ class ServerDaemonScheduler:
             multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
             signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
+            if signals:
+                self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "0925":
             title = f"🚀【09:25 开盘竞价打板精选】"
@@ -252,6 +256,8 @@ class ServerDaemonScheduler:
             multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
             signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
+            if signals:
+                self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "1450":
             title = f"📊【14:50 尾盘蓄势冲板精选】"
@@ -262,6 +268,8 @@ class ServerDaemonScheduler:
             multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
             signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
+            if signals:
+                self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "1458":
             title = f"🎯【14:58 尾盘竞价锁定】(次日大概率涨停)"
@@ -272,11 +280,15 @@ class ServerDaemonScheduler:
             multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
             signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
+            if signals:
+                self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "1510":
             screener = PostMarketReportScreener()
             report_data = screener.run_report()
-            self.pusher.push_post_market_report(report_data)
+            # 自动评估上一交易日系统自选推荐在今日的战绩与胜率
+            history_eval = self.history_tracker.evaluate_recent_signals(self.data_provider)
+            self.pusher.push_post_market_report(report_data, history_eval=history_eval)
 
     def test_wechat_push(self):
         """测试微信推送连通性"""
@@ -339,13 +351,13 @@ class ServerDaemonScheduler:
 
         # 记录今天已经执行过的任务，防止重复触发
         executed_today = set()
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
+        current_date_str = get_beijing_now().strftime("%Y-%m-%d")
         daily_intraday_alerts = 0
         MAX_DAILY_INTRADAY_ALERTS = 40
 
         while self.is_running:
             try:
-                now = datetime.now()
+                now = get_beijing_now()
                 today_str = now.strftime("%Y-%m-%d")
 
                 # 跨日清空已执行任务与盘中监控状态
