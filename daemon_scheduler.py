@@ -17,13 +17,14 @@ from config import WeChatNotifyConfig
 from notifications.wechat_pusher import WeChatPusher
 from data.mock_replay import MockReplayProvider
 from data.open_data_provider import OpenDataProvider
-from models.stock_item import StockQuote, ClosingSnapshot, Snapshot1458, Snapshot0923, AuctionSnapshot
+from models.stock_item import StockQuote, ClosingSnapshot, Snapshot1458, Snapshot0923, AuctionSnapshot, IntradayEvent
 from strategies.auction_0923 import Auction0923Screener
 from strategies.morning_auction import MorningAuctionScreener
 from strategies.closing_stage import ClosingStageScreener
 from strategies.closing_1458 import Closing1458Screener
 from strategies.market_sentiment import MarketSentimentAnalyzer
 from strategies.post_market_report import PostMarketReportScreener
+from strategies.intraday_monitor import IntradayMonitor
 
 
 class ServerDaemonScheduler:
@@ -35,6 +36,8 @@ class ServerDaemonScheduler:
         self.sentiment_analyzer = MarketSentimentAnalyzer()
         self.data_provider = OpenDataProvider()
         self.snapshot_0919: Dict[str, Any] = {}
+        self.intraday_monitor = IntradayMonitor(self.data_provider)
+        self.last_intraday_poll_ts: float = 0.0
 
     def is_trading_day(self, dt: datetime) -> bool:
         """判断是否为周一至周五工作日 (0=周一, 4=周五)"""
@@ -225,11 +228,45 @@ class ServerDaemonScheduler:
         print("[测试模式] 正在向配置的微信通道发送测试卡片...")
         self.execute_and_push("0923")
 
+    def test_intraday_push(self):
+        """测试盘中涨停上板与炸板异动微信推送"""
+        print("[测试模式] 正在构建盘中涨停与炸板模拟异动并推送到微信...")
+        ev1 = IntradayEvent(
+            event_type="LIMIT_UP",
+            code="600519",
+            name="贵州茅台",
+            current_price=1780.00,
+            change_pct=10.00,
+            event_time=datetime.now().strftime("%H:%M:%S"),
+            seal_amount_wan=65000.0,
+            turnover_rate=2.8,
+            open_board_count=0,
+            continuous_boards=2,
+            action_advice="【建议：重点打板/参与 2 进 3 接力】",
+            reason="1 进 2 换手晋级成功，确立身位优势。买一封单 65000 万元极其硬朗，承接有力，符合主线接力标准。"
+        )
+        ev2 = IntradayEvent(
+            event_type="BROKEN_BOARD",
+            code="000001",
+            name="平安银行",
+            current_price=12.15,
+            change_pct=7.20,
+            event_time=datetime.now().strftime("%H:%M:%S"),
+            seal_amount_wan=0.0,
+            turnover_rate=8.5,
+            open_board_count=1,
+            continuous_boards=1,
+            action_advice="【建议：回踩均线低吸·博秒回封】",
+            reason="炸板后价格仍坚守在 +7.2% 高位震荡，未出现踩踏恐慌，换手率 8.5% 良性，回踩分时均线不破可小仓位低吸博主力秒回封。"
+        )
+        self.pusher.push_intraday_events([ev1, ev2])
+
     def run_daemon(self):
         """启动守护主循环"""
         print("=" * 80)
         print("   A股打板量化策略系统 - 服务器后台自动化守护进程已启动")
-        print("   监控目标时间节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 | 15:10:05 (交易日)")
+        print("   关键定时节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 | 15:10:05 (交易日)")
+        print("   盘中实时监测: 09:30:00 - 11:30:00 & 13:00:00 - 14:50:00 (涨停封板/炸板异动实时告警)")
         print(f"   微信推送配置通道: {self.pusher.config.CHANNEL} (开启状态: {self.pusher.config.ENABLED})")
         print("=" * 80)
 
@@ -241,10 +278,13 @@ class ServerDaemonScheduler:
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
 
-            # 跨日清空已执行任务
+            # 跨日清空已执行任务与盘中监控状态
             if today_str != current_date_str:
                 executed_today.clear()
                 current_date_str = today_str
+                self.intraday_monitor.seen_zt_stocks.clear()
+                self.intraday_monitor.seen_zb_stocks.clear()
+                self.intraday_monitor.is_initialized = False
 
             # 周末跳过
             if not self.is_trading_day(now):
@@ -289,6 +329,22 @@ class ServerDaemonScheduler:
                     self.execute_and_push("1510")
                     executed_today.add("1510")
 
+            # 6. 盘中交易时段实时异动监控 (09:30:00 - 11:30:00 & 13:00:00 - 14:50:00)
+            is_morning_session = ("09:30:00" <= current_hms < "11:30:00")
+            is_afternoon_session = ("13:00:00" <= current_hms < "14:50:00")
+
+            if is_morning_session or is_afternoon_session:
+                # 间隔 20 秒轮询一次东财盘中涨停/炸板接口
+                if now.timestamp() - self.last_intraday_poll_ts >= 20.0:
+                    self.last_intraday_poll_ts = now.timestamp()
+                    try:
+                        events = self.intraday_monitor.check_events()
+                        if events:
+                            print(f"[{current_hms}] 盘中监测到 {len(events)} 起封板/炸板异动，正在推送微信...")
+                            self.pusher.push_intraday_events(events)
+                    except Exception as e:
+                        print(f"[{current_hms}] 盘中异动监测轮询异常: {e}")
+
             # 每次循环休眠 3 秒，低 CPU 占用且不错过时间节点
             time.sleep(3)
 
@@ -296,6 +352,7 @@ class ServerDaemonScheduler:
 def main():
     parser = argparse.ArgumentParser(description="A股打板量化调度服务 - 服务器后台与微信推送")
     parser.add_argument("--test-push", action="store_true", help="立即向微信发送一条测试选股卡片")
+    parser.add_argument("--test-intraday", action="store_true", help="立即向微信发送模拟盘中封板与炸板异动测试卡片")
     parser.add_argument("--post-market", action="store_true", help="立即生成并向微信推送 15:10 盘后涨停复盘与次日打板预案报告")
     parser.add_argument("--source", choices=["live", "mock"], default="mock", help="数据源 (live/mock)")
     args = parser.parse_args()
@@ -304,6 +361,8 @@ def main():
 
     if args.test_push:
         scheduler.test_wechat_push()
+    elif args.test_intraday:
+        scheduler.test_intraday_push()
     elif args.post_market:
         scheduler.execute_and_push("1510")
     else:

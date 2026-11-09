@@ -287,6 +287,10 @@ class OpenDataProvider:
                 code = str(item.get("c", "")).strip()
                 if not code:
                     continue
+                name = str(item.get("n", "")).strip()
+                price = float(item.get("p", 0) or 0.0) / 1000.0
+                zdp = float(item.get("zdp", 0.0) or 0.0)
+                hs = float(item.get("hs", 0.0) or 0.0)
                 fbt_raw = str(item.get("fbt", 0)).zfill(6)
                 lbt_raw = str(item.get("lbt", 0)).zfill(6)
                 fbt = f"{fbt_raw[:2]}:{fbt_raw[2:4]}:{fbt_raw[4:]}"
@@ -295,6 +299,11 @@ class OpenDataProvider:
                 fund = float(item.get("fund", 0) or 0.0)
                 lbc = int(item.get("lbc", 1) or 1)
                 details[code] = {
+                    "code": code,
+                    "name": name,
+                    "price": price,
+                    "change_pct": zdp,
+                    "turnover_rate": hs,
                     "first_seal_time": fbt,
                     "last_seal_time": lbt,
                     "open_board_count": zbc,
@@ -304,5 +313,45 @@ class OpenDataProvider:
             return details
         except Exception as e:
             print(f"[数据源错误] 获取今日涨停池明细失败: {e}")
+            return {}
+
+    def fetch_today_zb_pool_details(self) -> Dict[str, Dict[str, Any]]:
+        """
+        调用东财官方今日实时炸板池接口，获取所有盘中涨停后炸板的标的
+        """
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        url = (
+            f"https://push2ex.eastmoney.com/getTopicZBPool?"
+            f"ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date={today}"
+        )
+        try:
+            content = self._get_url_content(url)
+            data = json.loads(content)
+            pool = data.get("data", {}).get("pool", [])
+            details = {}
+            for item in pool:
+                code = str(item.get("c", "")).strip()
+                if not code:
+                    continue
+                name = str(item.get("n", "")).strip()
+                curr = float(item.get("p", 0.0) or 0.0) / 1000.0
+                pct = float(item.get("zdp", 0.0) or 0.0)
+                fbt_raw = str(item.get("fbt", 0)).zfill(6)
+                fbt = f"{fbt_raw[:2]}:{fbt_raw[2:4]}:{fbt_raw[4:]}"
+                zbc = int(item.get("zbc", 1) or 1)
+                hs = float(item.get("hs", 0.0) or 0.0)
+                details[code] = {
+                    "code": code,
+                    "name": name,
+                    "current_price": curr,
+                    "change_pct": pct,
+                    "first_seal_time": fbt,
+                    "open_board_count": zbc,
+                    "turnover_rate": hs
+                }
+            return details
+        except Exception as e:
+            print(f"[数据源错误] 获取今日炸板池明细失败: {e}")
             return {}
 

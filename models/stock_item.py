@@ -145,3 +145,21 @@ class PostMarketReportData:
     sentiment_summary: str         # 明日打板总基调与行情定位
     items: List[YesterdayLimitUpItem] = field(default_factory=list)
 
+
+@dataclass
+class IntradayEvent:
+    """盘中涨停封板 / 炸板异动事件"""
+    event_type: str                # "LIMIT_UP" (涨停封板) 或 "BROKEN_BOARD" (炸板)
+    code: str
+    name: str
+    current_price: float           # 现价
+    change_pct: float              # 当前涨跌幅 (%)
+    event_time: str                # 发生时间（如 "10:15:22"）
+    seal_amount_wan: float         # 封单金额（万元）
+    turnover_rate: float           # 换手率 (%)
+    open_board_count: int          # 全天炸板次数
+    continuous_boards: int         # 连板数
+    action_advice: str             # 买入/不买入操作建议
+    reason: str                    # 原因分析与筹码逻辑
+
+

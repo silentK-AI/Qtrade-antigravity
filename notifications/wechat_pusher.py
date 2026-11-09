@@ -11,9 +11,10 @@ import time
 import json
 import urllib.request
 import urllib.parse
+from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
 from config import WeChatNotifyConfig
-from models.stock_item import StrategySignal, PostMarketReportData
+from models.stock_item import StrategySignal, PostMarketReportData, IntradayEvent
 
 
 class WeChatPusher:
@@ -297,4 +298,79 @@ class WeChatPusher:
         else:
             print(f"[微信推送提示] 盘后复盘推送未能送达，请检查网络或Token。")
         return success
+
+    def format_intraday_events(self, events: List[IntradayEvent]) -> Tuple[str, str]:
+        """格式化盘中涨停封板/炸板异动提醒，返回 (title, markdown_content)"""
+        if not events:
+            return "", ""
+
+        if len(events) == 1:
+            ev = events[0]
+            if ev.event_type == "LIMIT_UP":
+                board_desc = f"{ev.continuous_boards}连板" if ev.continuous_boards > 1 else "晋级首板"
+                title = f"⚡【盘中异动·涨停封板】{ev.name}({ev.code}) {board_desc}"
+            else:
+                title = f"⚠️【盘中异动·炸板预警】{ev.name}({ev.code}) 炸板开板"
+        else:
+            zt_cnt = sum(1 for e in events if e.event_type == "LIMIT_UP")
+            zb_cnt = sum(1 for e in events if e.event_type == "BROKEN_BOARD")
+            summary_names = "、".join([e.name for e in events[:3]])
+            if len(events) > 3:
+                summary_names += f"等{len(events)}只"
+            title = f"🔔【盘中异动提醒】{summary_names} (封板{zt_cnt}家/炸板{zb_cnt}家)"
+
+        lines = []
+        lines.append(f"### {title}\n")
+        lines.append(f"> **监控时段**: 09:30 - 14:50 盘中实时捕获 | **捕获时间**: `{datetime.now().strftime('%H:%M:%S')}`\n")
+
+        for idx, ev in enumerate(events, 1):
+            if ev.event_type == "LIMIT_UP":
+                tag = f"<font color=\"#e74c3c\">⚡【涨停封板·{ev.continuous_boards}连板】</font>" if ev.continuous_boards > 1 else "<font color=\"#e74c3c\">⚡【涨停封板·首板】</font>"
+                lines.append(f"#### **{idx}. {ev.name} ({ev.code})** —— {tag}")
+                lines.append(f"- **封板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** (+{ev.change_pct:.2f}%)")
+                lines.append(f"- **盘口资金**: 封板资金 **{ev.seal_amount_wan:.0f}万元** | 换手率 **{ev.turnover_rate:.1f}%** | 炸板次数: **{ev.open_board_count}次**")
+                lines.append(f"- **操作建议**: <font color=\"#e67e22\">**{ev.action_advice}**</font>")
+                lines.append(f"- **原因逻辑**: {ev.reason}\n")
+            else:
+                tag = f"<font color=\"#2980b9\">⚠️【炸板开板·今日第{ev.open_board_count}次】</font>"
+                lines.append(f"#### **{idx}. {ev.name} ({ev.code})** —— {tag}")
+                lines.append(f"- **炸板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** ({ev.change_pct:+.2f}%)")
+                lines.append(f"- **换手特征**: 换手率 **{ev.turnover_rate:.1f}%**")
+                lines.append(f"- **操作建议**: <font color=\"#2980b9\">**{ev.action_advice}**</font>")
+                lines.append(f"- **原因逻辑**: {ev.reason}\n")
+
+        lines.append("---\n*量化策略系统实时监测，交易有风险，请遵守打板纪律*")
+        return title, "\n".join(lines)
+
+    def push_intraday_events(self, events: List[IntradayEvent]) -> bool:
+        """推送盘中异动事件至微信"""
+        if not events:
+            return False
+        if not self.config.ENABLED:
+            print("[微信推送] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
+            return False
+
+        title, markdown_body = self.format_intraday_events(events)
+        channel = self.config.CHANNEL.lower()
+        success = False
+
+        if channel == "pushplus":
+            success = self.send_pushplus(title, markdown_body)
+        elif channel == "serverchan":
+            success = self.send_serverchan(title, markdown_body)
+        elif channel == "wecom":
+            success = self.send_wecom(title, markdown_body)
+        else:
+            print(f"[微信推送] 未知通道: {channel}")
+            return False
+
+        if success:
+            print(f"[微信推送成功] 盘中异动提醒 ({title}) 已成功送达微信！")
+        else:
+            print(f"[微信推送提示] 盘中异动推送未能送达，请检查网络或Token。")
+        return success
+
+    def push_intraday_event(self, event: IntradayEvent) -> bool:
+        """单只标的异动快捷推送"""
+        return self.push_intraday_events([event])
 
