@@ -130,11 +130,11 @@ class OpenDataProvider:
         """
         从公开榜单接口抓取主板当下最活跃/涨幅居前的股票池
         """
-        # 东财沪深主板榜单 (m:0+t:6,m:0+t:80 为深市主板; m:1+t:2,m:1+t:23 为沪市主板)
+        # 东财官方纯沪深主板榜单 (m:0+t:6 为深市主板; m:1+t:2 为沪市主板，精准排除创业板与科创板)
         url = (
             "https://push2.eastmoney.com/api/qt/clist/get?"
-            "pn=1&pz=150&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
-            "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+            "pn=1&pz=200&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+            "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:1+t:2"
             "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21"
         )
         try:
