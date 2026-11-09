@@ -48,7 +48,7 @@ class Closing1458Screener(BaseScreener):
             pattern = "【龙头风向标·买不进】铁板锁仓"
             action = "【早盘已封死·14:58买不进！】若早盘已持有，则坚决锁仓一股不卖，次日坐等连板"
             expectation = "绝对核心领涨龙头，早盘即封死，次日高概率高开或秒板，为后排打开高度空间。"
-            return 98.0, 60.0, pattern, factors, action, expectation
+            raw_score, raw_cap = 98.0, 60.0
 
         # -----------------------------------------------------------------
         # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板时间 >= 14:00，或盘中炸板多次尾盘压哨回封)
@@ -60,7 +60,7 @@ class Closing1458Screener(BaseScreener):
             pattern = "【尾盘回封·能买进】分歧转一致次日连板"
             action = "【14:58立即挂涨停价委托】排队进入收盘集合竞价，预计大概率能成交！"
             expectation = "尾盘经受分歧后顽强回封，浮筹已在盘中洗尽，次日享受弱转强高开连板溢价。"
-            return 92.0, 52.0, pattern, factors, action, expectation
+            raw_score, raw_cap = 92.0, 52.0
 
         # -----------------------------------------------------------------
         # 场景三：其他时间段平稳封死的主板标的 (买入概率低)
@@ -71,10 +71,10 @@ class Closing1458Screener(BaseScreener):
             pattern = "【日内封板·排单难成】"
             action = "【14:58挂单成交率偏低】建议作为次日观察标的，不建议强行排单"
             expectation = "日内平稳封板，重点观察次日竞价承接情况。"
-            return 86.0, 48.0, pattern, factors, action, expectation
+            raw_score, raw_cap = 86.0, 48.0
 
         # -----------------------------------------------------------------
-        # 场景三：尾盘放量蓄势冲板未遂 (+5.5% ~ +8.8%，100%市价秒买进！)
+        # 场景四：尾盘放量蓄势冲板未遂 (+5.5% ~ +8.8%，100%市价秒买进！)
         # -----------------------------------------------------------------
         elif not snap.is_limit_up and snap.indicative_change_pct >= 5.5:
             factors["【可买入性】"] = "✅ 100%秒买进！盘口卖单充足，直接市价挂单即时成交"
@@ -82,12 +82,17 @@ class Closing1458Screener(BaseScreener):
             pattern = "【蓄势未板·100%买进】尾盘突击次日冲板"
             action = "【14:58-14:59市价直接买入】在收盘前锁定底仓，次日早盘享受抬轿"
             expectation = "全天主力沿均线蓄势推升，尾盘爆量隐蔽吸筹，次日早盘极高概率直接集合竞价高开抢筹冲涨停。"
-            return 88.0, 48.0, pattern, factors, action, expectation
+            raw_score, raw_cap = 88.0, 48.0
 
         # -----------------------------------------------------------------
         # 其余平庸标的淘汰
         # -----------------------------------------------------------------
-        return 0.0, 0.0, "平庸标的", {"【状态】": "不符合尾盘进攻特征"}, "观望", "无次日涨停预期"
+        else:
+            return 0.0, 0.0, "平庸标的", {"【状态】": "不符合尾盘进攻特征"}, "观望", "无次日涨停预期"
+
+        final_score = round(min(100.0, raw_score * sentiment_multiplier), 1)
+        final_cap = round(min(60.0, raw_cap * sentiment_multiplier), 1)
+        return final_score, final_cap, pattern, factors, action, expectation
 
     def run_strategy(
         self,

@@ -1,11 +1,60 @@
 """
-终端美化排版与日志记录工具
-重点突出资金因子（资金得分 >= 55% 权重）、买入指引与止损风控
+终端美化排版与结构化日志工具
+支持控制台彩色高亮、标准 logging 框架与本地滚动日志文件留痕 (RotatingFileHandler)
 """
 
+import os
 import sys
-from typing import List
+import logging
+from logging.handlers import RotatingFileHandler
+from typing import List, Optional
 from models.stock_item import StrategySignal
+
+
+# 确保 logs 目录存在
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+DEFAULT_LOG_FILE = os.path.join(LOG_DIR, "quant_screener.log")
+
+
+def get_logger(name: str = "quant_screener", log_file: Optional[str] = None) -> logging.Logger:
+    """
+    获取全局结构化日志记录器
+    同时输出到控制台与滚动日志文件，支持 INFO/WARNING/ERROR 分级与异常追溯
+    """
+    logger = logging.getLogger(name)
+    if logger.handlers:
+        return logger
+
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # 1. 控制台 Handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # 2. 滚动文件 Handler (单文件 10MB，保留 5 个备份)
+    target_file = log_file or DEFAULT_LOG_FILE
+    try:
+        file_handler = RotatingFileHandler(
+            target_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8"
+        )
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"[日志初始化警告] 无法创建日志文件 {target_file}: {e}")
+
+    logger.propagate = False
+    return logger
 
 
 class TerminalVisualizer:

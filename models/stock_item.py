@@ -161,5 +161,6 @@ class IntradayEvent:
     continuous_boards: int         # 连板数
     action_advice: str             # 买入/不买入操作建议
     reason: str                    # 原因分析与筹码逻辑
+    industry: str = "主板题材"     # 所属行业/核心题材
 
 

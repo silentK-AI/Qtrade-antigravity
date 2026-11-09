@@ -8,7 +8,7 @@
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from models.stock_item import YesterdayLimitUpItem, PostMarketReportData
 from config import PostMarketReportConfig
 from data.open_data_provider import OpenDataProvider
@@ -99,7 +99,7 @@ class PostMarketReportScreener:
         low_pct: float,
         turnover_rate: float,
         amplitude: float
-    ) -> (str, str):
+    ) -> Tuple[str, str]:
         """
         基于 A 股经典打板与接力纪律，输出次日打板预案
         """

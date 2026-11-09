@@ -4,12 +4,16 @@
 无需注册、无需 Token、开箱即用，支持主板批量实时行情与盘口抓取
 """
 
+import time
 import json
 import urllib.request
 import urllib.parse
 from typing import List, Dict, Optional, Any
 from models.stock_item import StockQuote
 from utils.filters import StockFilter
+from utils.logger import get_logger
+
+logger = get_logger("open_data_provider")
 
 
 class OpenDataProvider:
@@ -19,7 +23,7 @@ class OpenDataProvider:
         self.timeout = timeout
         self.filter = StockFilter()
 
-    def _get_url_content(self, url: str, encoding: str = "utf-8") -> str:
+    def _get_url_content(self, url: str, encoding: str = "utf-8", max_retries: int = 3) -> str:
         req = urllib.request.Request(
             url,
             headers={
@@ -27,8 +31,18 @@ class OpenDataProvider:
                 "Referer": "https://finance.qq.com"
             }
         )
-        with urllib.request.urlopen(req, timeout=self.timeout) as response:
-            return response.read().decode(encoding, errors="ignore")
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                    return response.read().decode(encoding, errors="ignore")
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries - 1:
+                    time.sleep(0.3 * (2 ** attempt))
+        if last_err:
+            raise last_err
+        return ""
 
     def fetch_realtime_quotes(self, codes: List[str]) -> List[StockQuote]:
         """
@@ -308,11 +322,12 @@ class OpenDataProvider:
                     "last_seal_time": lbt,
                     "open_board_count": zbc,
                     "seal_amount": fund,
-                    "continuous_boards": lbc
+                    "continuous_boards": lbc,
+                    "industry": str(item.get("hybk", "")).strip()
                 }
             return details
         except Exception as e:
-            print(f"[数据源错误] 获取今日涨停池明细失败: {e}")
+            logger.warning(f"获取今日涨停池明细失败: {e}")
             return {}
 
     def fetch_today_zb_pool_details(self) -> Dict[str, Dict[str, Any]]:
@@ -348,10 +363,11 @@ class OpenDataProvider:
                     "change_pct": pct,
                     "first_seal_time": fbt,
                     "open_board_count": zbc,
-                    "turnover_rate": hs
+                    "turnover_rate": hs,
+                    "industry": str(item.get("hybk", "")).strip()
                 }
             return details
         except Exception as e:
-            print(f"[数据源错误] 获取今日炸板池明细失败: {e}")
+            logger.warning(f"获取今日炸板池明细失败: {e}")
             return {}
 

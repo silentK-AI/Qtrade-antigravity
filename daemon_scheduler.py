@@ -9,6 +9,7 @@
 
 import sys
 import time
+import signal
 import argparse
 from datetime import datetime, timedelta
 from typing import List, Tuple, Dict, Any, Optional
@@ -25,6 +26,10 @@ from strategies.closing_1458 import Closing1458Screener
 from strategies.market_sentiment import MarketSentimentAnalyzer
 from strategies.post_market_report import PostMarketReportScreener
 from strategies.intraday_monitor import IntradayMonitor
+from utils.calendar import TradeCalendar
+from utils.logger import get_logger
+
+logger = get_logger("daemon_scheduler")
 
 
 class ServerDaemonScheduler:
@@ -38,10 +43,11 @@ class ServerDaemonScheduler:
         self.snapshot_0919: Dict[str, Any] = {}
         self.intraday_monitor = IntradayMonitor(self.data_provider)
         self.last_intraday_poll_ts: float = 0.0
+        self.is_running: bool = True
 
     def is_trading_day(self, dt: datetime) -> bool:
-        """判断是否为周一至周五工作日 (0=周一, 4=周五)"""
-        return dt.weekday() < 5
+        """判断是否为真实 A 股交易日 (排除周末及元旦/春节/清明/五一/端午/中秋/国庆法定休市)"""
+        return TradeCalendar.is_trading_day(dt)
 
     def _capture_0919_snapshot(self):
         """09:19:50 锚定抓取集合竞价可撤单峰值（用于9:23判定虚假撤单）"""
@@ -90,8 +96,66 @@ class ServerDaemonScheduler:
                     if candidates:
                         return candidates
             except Exception as e:
-                print(f"[数据源提示] 09:23 实时接口获取异常，自动回退高保真回放: {e}")
+                logger.warning(f"09:23 实时接口获取异常，自动回退高保真回放: {e}")
         return MockReplayProvider.get_0923_dataset()
+
+    def _get_0925_candidates(self) -> List[Tuple[StockQuote, AuctionSnapshot]]:
+        """获取 09:25 开盘集合竞价候选标的（打板与首板/1进2）"""
+        if self.source == "live":
+            try:
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                if quotes:
+                    candidates = []
+                    for q in quotes:
+                        if not (1.5 <= q.change_pct <= 9.9):
+                            continue
+                        open_p = q.open_price if q.open_price > 0 else q.current_price
+                        vol_ratio = (q.volume / max(q.volume * 6.0, 1.0)) if q.volume > 0 else 0.08
+                        unmatched = max(q.amount * 0.2, 5000000.0)
+                        
+                        snap = AuctionSnapshot(
+                            code=q.code,
+                            auction_price=open_p,
+                            gap_percent=q.change_pct,
+                            auction_volume=q.volume,
+                            auction_amount=q.amount,
+                            auction_vol_ratio=vol_ratio,
+                            unmatched_buy_amount=unmatched,
+                            unmatched_to_auction_ratio=0.6,
+                            is_one_to_two=(q.change_pct >= 2.0),
+                            last_minute_rush=True
+                        )
+                        candidates.append((q, snap))
+                    if candidates:
+                        return candidates
+            except Exception as e:
+                logger.warning(f"09:25 实时接口获取异常，自动回退高保真回放: {e}")
+        return MockReplayProvider.get_morning_auction_dataset()
+
+    def _get_live_or_fallback_sentiment(self, quotes: Optional[List[StockQuote]] = None) -> Dict[str, Any]:
+        """获取全市场真实短线情绪周期指标（含真实涨停数、炸板率、最高连板与主线题材）"""
+        if self.source == "live":
+            try:
+                sentiment = self.sentiment_analyzer.evaluate_realtime_sentiment(self.data_provider, quotes)
+                logger.info(
+                    f"[实时情绪] 状态: {sentiment.get('status')} | 涨停: {sentiment.get('limit_up_count')}家 | "
+                    f"炸板率: {sentiment.get('exploded_ratio', 0.0):.1f}% | 最高: {sentiment.get('highest_continuous_board')}板 | "
+                    f"主线题材: {sentiment.get('top_theme')}"
+                )
+                return sentiment
+            except Exception as e:
+                logger.warning(f"拉取实时市场情绪异常，回退默认情绪: {e}")
+
+        return {
+            "status": "活跃/做多周期",
+            "limit_up_count": 35,
+            "limit_down_count": 0,
+            "exploded_ratio": 12.5,
+            "highest_continuous_board": 5,
+            "top_theme": "主板核心热点",
+            "risk_advice": "聚焦有板块梯队配合的核心前排标的。",
+            "sentiment_multiplier": 1.0
+        }
 
     def _get_1450_candidates(self):
         if self.source == "live":
@@ -167,55 +231,46 @@ class ServerDaemonScheduler:
     def execute_and_push(self, task_type: str):
         """执行指定时段策略并推送微信"""
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n[{now_str}] 触发定时量化任务: 【{task_type}】...")
+        logger.info(f"触发定时量化任务: 【{task_type}】...")
 
         if task_type == "0923":
             title = f"🔔【09:23 早盘锁板精选】(全天封死+次日涨停)"
             screener = Auction0923Screener()
             dataset = self._get_0923_candidates()
-
-            sentiment = {
-                "status": "活跃/做多周期", "limit_up_count": 35,
-                "exploded_ratio": 12.5, "highest_continuous_board": 5,
-                "top_theme": "西部大开发 / 算力主线"
-            }
-            signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+            quotes = [q for q, _ in dataset] if dataset else None
+            sentiment = self._get_live_or_fallback_sentiment(quotes)
+            multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+            signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
 
         elif task_type == "0925":
             title = f"🚀【09:25 开盘竞价打板精选】"
             screener = MorningAuctionScreener()
-            dataset = MockReplayProvider.get_morning_auction_dataset()
-            sentiment = {
-                "status": "活跃/做多周期", "limit_up_count": 38,
-                "exploded_ratio": 13.6, "highest_continuous_board": 5,
-                "top_theme": "低空经济 / 算力协同"
-            }
-            signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+            dataset = self._get_0925_candidates()
+            quotes = [q for q, _ in dataset] if dataset else None
+            sentiment = self._get_live_or_fallback_sentiment(quotes)
+            multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+            signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
 
         elif task_type == "1450":
             title = f"📊【14:50 尾盘蓄势冲板精选】"
             screener = ClosingStageScreener()
             dataset = self._get_1450_candidates()
-            sentiment = {
-                "status": "活跃/做多周期", "limit_up_count": 42,
-                "exploded_ratio": 16.0, "highest_continuous_board": 5,
-                "top_theme": "高端制造 / 商业航天"
-            }
-            signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+            quotes = [q for q, _ in dataset] if dataset else None
+            sentiment = self._get_live_or_fallback_sentiment(quotes)
+            multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+            signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
 
         elif task_type == "1458":
             title = f"🎯【14:58 尾盘竞价锁定】(次日大概率涨停)"
             screener = Closing1458Screener()
             dataset = self._get_1458_candidates()
-            sentiment = {
-                "status": "活跃/做多周期", "limit_up_count": 45,
-                "exploded_ratio": 11.0, "highest_continuous_board": 6,
-                "top_theme": "创新药 / 新质生产力"
-            }
-            signals = screener.run_strategy(dataset, sentiment_multiplier=1.05)
+            quotes = [q for q, _ in dataset] if dataset else None
+            sentiment = self._get_live_or_fallback_sentiment(quotes)
+            multiplier = float(sentiment.get("sentiment_multiplier", 1.0))
+            signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
             self.pusher.push(signals, title, sentiment)
 
         elif task_type == "1510":
@@ -225,12 +280,12 @@ class ServerDaemonScheduler:
 
     def test_wechat_push(self):
         """测试微信推送连通性"""
-        print("[测试模式] 正在向配置的微信通道发送测试卡片...")
+        logger.info("[测试模式] 正在向配置的微信通道发送测试卡片...")
         self.execute_and_push("0923")
 
     def test_intraday_push(self):
         """测试盘中涨停上板与炸板异动微信推送"""
-        print("[测试模式] 正在构建盘中涨停与炸板模拟异动并推送到微信...")
+        logger.info("[测试模式] 正在构建盘中涨停与炸板模拟异动并推送到微信...")
         ev1 = IntradayEvent(
             event_type="LIMIT_UP",
             code="600519",
@@ -243,7 +298,8 @@ class ServerDaemonScheduler:
             open_board_count=0,
             continuous_boards=2,
             action_advice="【建议：重点打板/参与 2 进 3 接力】",
-            reason="1 进 2 换手晋级成功，确立身位优势。买一封单 65000 万元极其硬朗，承接有力，符合主线接力标准。"
+            reason="1 进 2 换手晋级成功，确立身位优势。买一封单 65000 万元极其硬朗，承接有力，符合主线接力标准。",
+            industry="白酒"
         )
         ev2 = IntradayEvent(
             event_type="BROKEN_BOARD",
@@ -257,96 +313,120 @@ class ServerDaemonScheduler:
             open_board_count=1,
             continuous_boards=1,
             action_advice="【建议：回踩均线低吸·博秒回封】",
-            reason="炸板后价格仍坚守在 +7.2% 高位震荡，未出现踩踏恐慌，换手率 8.5% 良性，回踩分时均线不破可小仓位低吸博主力秒回封。"
+            reason="炸板后价格仍坚守在 +7.2% 高位震荡，未出现踩踏恐慌，换手率 8.5% 良性，回踩分时均线不破可小仓位低吸博主力秒回封。",
+            industry="股份制银行"
         )
         self.pusher.push_intraday_events([ev1, ev2])
 
     def run_daemon(self):
         """启动守护主循环"""
-        print("=" * 80)
-        print("   A股打板量化策略系统 - 服务器后台自动化守护进程已启动")
-        print("   关键定时节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 | 15:10:05 (交易日)")
-        print("   盘中实时监测: 09:30:00 - 11:30:00 & 13:00:00 - 14:50:00 (涨停封板/炸板异动实时告警)")
-        print(f"   微信推送配置通道: {self.pusher.config.CHANNEL} (开启状态: {self.pusher.config.ENABLED})")
-        print("=" * 80)
+        # 优雅停机信号处理
+        def _handle_shutdown(signum, frame):
+            logger.info(f"收到终止信号 ({signum})，守护进程正在安全退出...")
+            self.is_running = False
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, _handle_shutdown)
+        signal.signal(signal.SIGTERM, _handle_shutdown)
+
+        logger.info("=" * 80)
+        logger.info("   A股打板量化策略系统 - 服务器后台自动化守护进程已启动")
+        logger.info("   交易日历模块: 沪深法定休市日自动过滤 (A股周末与节假日休市完全识别)")
+        logger.info("   关键定时节点: 09:23:05 | 09:25:05 | 14:50:00 | 14:58:05 | 15:10:05 (交易日)")
+        logger.info("   盘中实时监测: 09:30:00 - 11:30:00 & 13:00:00 - 14:50:00 (涨停封板/炸板异动实时告警)")
+        logger.info(f"   微信推送配置通道: {self.pusher.config.CHANNEL} (开启状态: {self.pusher.config.ENABLED})")
+        logger.info("=" * 80)
 
         # 记录今天已经执行过的任务，防止重复触发
         executed_today = set()
         current_date_str = datetime.now().strftime("%Y-%m-%d")
+        daily_intraday_alerts = 0
+        MAX_DAILY_INTRADAY_ALERTS = 40
 
-        while True:
-            now = datetime.now()
-            today_str = now.strftime("%Y-%m-%d")
+        while self.is_running:
+            try:
+                now = datetime.now()
+                today_str = now.strftime("%Y-%m-%d")
 
-            # 跨日清空已执行任务与盘中监控状态
-            if today_str != current_date_str:
-                executed_today.clear()
-                current_date_str = today_str
-                self.intraday_monitor.seen_zt_stocks.clear()
-                self.intraday_monitor.seen_zb_stocks.clear()
-                self.intraday_monitor.is_initialized = False
+                # 跨日清空已执行任务与盘中监控状态
+                if today_str != current_date_str:
+                    executed_today.clear()
+                    current_date_str = today_str
+                    daily_intraday_alerts = 0
+                    self.intraday_monitor.seen_zt_stocks.clear()
+                    self.intraday_monitor.seen_zb_stocks.clear()
+                    self.intraday_monitor.is_initialized = False
 
-            # 周末跳过
-            if not self.is_trading_day(now):
-                time.sleep(60)
-                continue
+                # A股非交易日（周末及法定假日）跳过
+                if not self.is_trading_day(now):
+                    time.sleep(60)
+                    continue
 
-            current_hm = now.strftime("%H:%M")
-            current_hms = now.strftime("%H:%M:%S")
+                current_hm = now.strftime("%H:%M")
+                current_hms = now.strftime("%H:%M:%S")
 
-            # 0. 09:19:50 锚定抓取集合竞价可撤单峰值快照（用于9:23判定虚假撤单）
-            if current_hm == "09:19" and "0919" not in executed_today:
-                if now.second >= 50:
-                    self._capture_0919_snapshot()
-                    executed_today.add("0919")
+                # 0. 09:19:50 锚定抓取集合竞价可撤单峰值快照（用于9:23判定虚假撤单）
+                if current_hm == "09:19" and "0919" not in executed_today:
+                    if now.second >= 50:
+                        self._capture_0919_snapshot()
+                        executed_today.add("0919")
 
-            # 1. 09:23:05 触发
-            if current_hm == "09:23" and "0923" not in executed_today:
-                if now.second >= 5:
-                    self.execute_and_push("0923")
-                    executed_today.add("0923")
+                # 1. 09:23:05 触发
+                if current_hm == "09:23" and "0923" not in executed_today:
+                    if now.second >= 5:
+                        self.execute_and_push("0923")
+                        executed_today.add("0923")
 
-            # 2. 09:25:05 触发
-            elif current_hm == "09:25" and "0925" not in executed_today:
-                if now.second >= 5:
-                    self.execute_and_push("0925")
-                    executed_today.add("0925")
+                # 2. 09:25:05 触发
+                elif current_hm == "09:25" and "0925" not in executed_today:
+                    if now.second >= 5:
+                        self.execute_and_push("0925")
+                        executed_today.add("0925")
 
-            # 3. 14:50:00 触发
-            elif current_hm == "14:50" and "1450" not in executed_today:
-                self.execute_and_push("1450")
-                executed_today.add("1450")
+                # 3. 14:50:00 触发
+                elif current_hm == "14:50" and "1450" not in executed_today:
+                    self.execute_and_push("1450")
+                    executed_today.add("1450")
 
-            # 4. 14:58:05 触发
-            elif current_hm == "14:58" and "1458" not in executed_today:
-                if now.second >= 5:
-                    self.execute_and_push("1458")
-                    executed_today.add("1458")
+                # 4. 14:58:05 触发
+                elif current_hm == "14:58" and "1458" not in executed_today:
+                    if now.second >= 5:
+                        self.execute_and_push("1458")
+                        executed_today.add("1458")
 
-            # 5. 15:10:05 触发 15:10 盘后涨停复盘与次日预案
-            elif current_hm == "15:10" and "1510" not in executed_today:
-                if now.second >= 5:
-                    self.execute_and_push("1510")
-                    executed_today.add("1510")
+                # 5. 15:10:05 触发 15:10 盘后涨停复盘与次日预案
+                elif current_hm == "15:10" and "1510" not in executed_today:
+                    if now.second >= 5:
+                        self.execute_and_push("1510")
+                        executed_today.add("1510")
 
-            # 6. 盘中交易时段实时异动监控 (09:30:00 - 11:30:00 & 13:00:00 - 14:50:00)
-            is_morning_session = ("09:30:00" <= current_hms < "11:30:00")
-            is_afternoon_session = ("13:00:00" <= current_hms < "14:50:00")
+                # 6. 盘中交易时段实时异动监控 (09:30:00 - 11:30:00 & 13:00:00 - 14:50:00)
+                is_morning_session = ("09:30:00" <= current_hms < "11:30:00")
+                is_afternoon_session = ("13:00:00" <= current_hms < "14:50:00")
 
-            if is_morning_session or is_afternoon_session:
-                # 间隔 20 秒轮询一次东财盘中涨停/炸板接口
-                if now.timestamp() - self.last_intraday_poll_ts >= 20.0:
-                    self.last_intraday_poll_ts = now.timestamp()
-                    try:
-                        events = self.intraday_monitor.check_events()
-                        if events:
-                            print(f"[{current_hms}] 盘中监测到 {len(events)} 起封板/炸板异动，正在推送微信...")
-                            self.pusher.push_intraday_events(events)
-                    except Exception as e:
-                        print(f"[{current_hms}] 盘中异动监测轮询异常: {e}")
+                if is_morning_session or is_afternoon_session:
+                    # 间隔 20 秒轮询一次东财盘中涨停/炸板接口
+                    if now.timestamp() - self.last_intraday_poll_ts >= 20.0:
+                        self.last_intraday_poll_ts = now.timestamp()
+                        try:
+                            events = self.intraday_monitor.check_events()
+                            if events:
+                                if daily_intraday_alerts < MAX_DAILY_INTRADAY_ALERTS:
+                                    logger.info(f"[{current_hms}] 盘中监测到 {len(events)} 起封板/炸板异动，正在推送微信...")
+                                    self.pusher.push_intraday_events(events)
+                                    daily_intraday_alerts += len(events)
+                                elif daily_intraday_alerts == MAX_DAILY_INTRADAY_ALERTS:
+                                    logger.warning(f"今日盘中异动推送已达上限 ({MAX_DAILY_INTRADAY_ALERTS}次)，暂停后续微信通知以防刷屏")
+                                    daily_intraday_alerts += 1
+                        except Exception as e:
+                            logger.warning(f"[{current_hms}] 盘中异动监测轮询异常: {e}")
 
-            # 每次循环休眠 3 秒，低 CPU 占用且不错过时间节点
-            time.sleep(3)
+                # 每次循环休眠 3 秒，低 CPU 占用且不错过时间节点
+                time.sleep(3)
+
+            except Exception as e:
+                logger.error(f"守护主循环遭遇异常，自动平稳恢复: {e}", exc_info=True)
+                time.sleep(5)
 
 
 def main():

@@ -12,6 +12,27 @@ from dataclasses import dataclass, field
 from typing import List
 
 
+def _load_env_file():
+    """轻量级加载项目根目录 .env 文件（若存在），支持敏感 Token 本地化隔离，无需额外三方依赖"""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+
+_load_env_file()
+
+
 @dataclass
 class MainBoardFilterConfig:
     """主板股票过滤配置"""

@@ -12,6 +12,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from models.stock_item import IntradayEvent
 from utils.filters import StockFilter
 from data.open_data_provider import OpenDataProvider
+from utils.logger import get_logger
+
+logger = get_logger("intraday_monitor")
 
 
 class IntradayMonitor:
@@ -100,13 +103,14 @@ class IntradayMonitor:
                         open_board_count=zbc,
                         continuous_boards=lbc,
                         action_advice=advice,
-                        reason=reason
+                        reason=reason,
+                        industry=str(item.get("industry", "") or "主板题材")
                     )
                     events.append(event)
                     # 更新已封板缓存
                     self.seen_zt_stocks[code] = item
         except Exception as e:
-            print(f"[盘中监控封板查询异常] {e}")
+            logger.warning(f"盘中监控封板查询异常: {e}")
 
         # -------------------------------------------------------------
         # 2. 检查【炸板开板】异动
@@ -149,7 +153,8 @@ class IntradayMonitor:
                         open_board_count=curr_zbc,
                         continuous_boards=1,
                         action_advice=advice,
-                        reason=reason
+                        reason=reason,
+                        industry=str(item.get("industry", "") or "主板题材")
                     )
                     events.append(event)
                     # 更新炸板次数记录
@@ -158,7 +163,7 @@ class IntradayMonitor:
                     if code in self.seen_zt_stocks:
                         del self.seen_zt_stocks[code]
         except Exception as e:
-            print(f"[盘中监控炸板查询异常] {e}")
+            logger.warning(f"盘中监控炸板查询异常: {e}")
 
         return events
 

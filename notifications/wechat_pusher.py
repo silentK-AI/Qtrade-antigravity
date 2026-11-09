@@ -15,6 +15,9 @@ from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
 from config import WeChatNotifyConfig
 from models.stock_item import StrategySignal, PostMarketReportData, IntradayEvent
+from utils.logger import get_logger
+
+logger = get_logger("wechat_pusher")
 
 
 class WeChatPusher:
@@ -200,20 +203,12 @@ class WeChatPusher:
             print(f"[微信推送异常] 企业微信 发送失败: {e}")
             return False
 
-    def push(
-        self,
-        signals: List[StrategySignal],
-        title: str,
-        sentiment: Dict[str, Any]
-    ) -> bool:
-        """
-        统一推送入口：根据配置的通道自动分发
-        """
+    def _dispatch_push(self, title: str, markdown_body: str, log_tag: str = "微信推送") -> bool:
+        """统一底层推送通道分发与容错"""
         if not self.config.ENABLED:
-            print("[微信推送] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
+            logger.info(f"[{log_tag}] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
             return False
 
-        markdown_body = self.format_markdown_message(signals, title, sentiment)
         channel = self.config.CHANNEL.lower()
         success = False
 
@@ -224,14 +219,24 @@ class WeChatPusher:
         elif channel == "wecom":
             success = self.send_wecom(title, markdown_body)
         else:
-            print(f"[微信推送] 未知通道: {channel}，请在 config.py 中配置为 pushplus / serverchan / wecom")
+            logger.error(f"[{log_tag}] 未知通道: {channel}，请在 config.py 中配置为 pushplus / serverchan / wecom")
             return False
 
         if success:
-            print(f"[微信推送成功] 标题: {title} 已成功送达微信！")
+            logger.info(f"[{log_tag}成功] 标题: {title} 已成功送达微信！")
         else:
-            print(f"[微信推送提示] 未能成功推送，请检查 config.py 中的 Token 或 Key 配置。")
+            logger.warning(f"[{log_tag}提示] 未能成功推送，请检查网络或 Token 配置。")
         return success
+
+    def push(
+        self,
+        signals: List[StrategySignal],
+        title: str,
+        sentiment: Dict[str, Any]
+    ) -> bool:
+        """统一策略选股信号推送入口"""
+        markdown_body = self.format_markdown_message(signals, title, sentiment)
+        return self._dispatch_push(title, markdown_body, log_tag="策略信号推送")
 
     def format_post_market_report(self, r: PostMarketReportData) -> str:
         """格式化适合微信手机阅读的 15:10 盘后涨停复盘与次日预案报告"""
@@ -275,29 +280,8 @@ class WeChatPusher:
     def push_post_market_report(self, report: PostMarketReportData) -> bool:
         """推送 15:10 盘后涨停复盘与次日预案至微信"""
         title = f"📋【15:10 盘后涨停复盘】今日晋级率{report.advancement_rate:.1f}%，最高{report.highest_board}板"
-        if not self.config.ENABLED:
-            print("[微信推送] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
-            return False
-
         markdown_body = self.format_post_market_report(report)
-        channel = self.config.CHANNEL.lower()
-        success = False
-
-        if channel == "pushplus":
-            success = self.send_pushplus(title, markdown_body)
-        elif channel == "serverchan":
-            success = self.send_serverchan(title, markdown_body)
-        elif channel == "wecom":
-            success = self.send_wecom(title, markdown_body)
-        else:
-            print(f"[微信推送] 未知通道: {channel}")
-            return False
-
-        if success:
-            print(f"[微信推送成功] 盘后复盘报告已成功送达微信！")
-        else:
-            print(f"[微信推送提示] 盘后复盘推送未能送达，请检查网络或Token。")
-        return success
+        return self._dispatch_push(title, markdown_body, log_tag="盘后复盘推送")
 
     def format_intraday_events(self, events: List[IntradayEvent]) -> Tuple[str, str]:
         """格式化盘中涨停封板/炸板异动提醒，返回 (title, markdown_content)"""
@@ -324,17 +308,18 @@ class WeChatPusher:
         lines.append(f"> **监控时段**: 09:30 - 14:50 盘中实时捕获 | **捕获时间**: `{datetime.now().strftime('%H:%M:%S')}`\n")
 
         for idx, ev in enumerate(events, 1):
+            industry_str = f" | 题材: **{ev.industry}**" if ev.industry else ""
             if ev.event_type == "LIMIT_UP":
                 tag = f"<font color=\"#e74c3c\">⚡【涨停封板·{ev.continuous_boards}连板】</font>" if ev.continuous_boards > 1 else "<font color=\"#e74c3c\">⚡【涨停封板·首板】</font>"
                 lines.append(f"#### **{idx}. {ev.name} ({ev.code})** —— {tag}")
-                lines.append(f"- **封板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** (+{ev.change_pct:.2f}%)")
+                lines.append(f"- **封板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** (+{ev.change_pct:.2f}%){industry_str}")
                 lines.append(f"- **盘口资金**: 封板资金 **{ev.seal_amount_wan:.0f}万元** | 换手率 **{ev.turnover_rate:.1f}%** | 炸板次数: **{ev.open_board_count}次**")
                 lines.append(f"- **操作建议**: <font color=\"#e67e22\">**{ev.action_advice}**</font>")
                 lines.append(f"- **原因逻辑**: {ev.reason}\n")
             else:
                 tag = f"<font color=\"#2980b9\">⚠️【炸板开板·今日第{ev.open_board_count}次】</font>"
                 lines.append(f"#### **{idx}. {ev.name} ({ev.code})** —— {tag}")
-                lines.append(f"- **炸板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** ({ev.change_pct:+.2f}%)")
+                lines.append(f"- **炸板时间**: `{ev.event_time}` | **现价**: **{ev.current_price:.2f}元** ({ev.change_pct:+.2f}%){industry_str}")
                 lines.append(f"- **换手特征**: 换手率 **{ev.turnover_rate:.1f}%**")
                 lines.append(f"- **操作建议**: <font color=\"#2980b9\">**{ev.action_advice}**</font>")
                 lines.append(f"- **原因逻辑**: {ev.reason}\n")
@@ -346,29 +331,8 @@ class WeChatPusher:
         """推送盘中异动事件至微信"""
         if not events:
             return False
-        if not self.config.ENABLED:
-            print("[微信推送] 配置为未开启状态 (ENABLED=False)，跳过网络推送。")
-            return False
-
         title, markdown_body = self.format_intraday_events(events)
-        channel = self.config.CHANNEL.lower()
-        success = False
-
-        if channel == "pushplus":
-            success = self.send_pushplus(title, markdown_body)
-        elif channel == "serverchan":
-            success = self.send_serverchan(title, markdown_body)
-        elif channel == "wecom":
-            success = self.send_wecom(title, markdown_body)
-        else:
-            print(f"[微信推送] 未知通道: {channel}")
-            return False
-
-        if success:
-            print(f"[微信推送成功] 盘中异动提醒 ({title}) 已成功送达微信！")
-        else:
-            print(f"[微信推送提示] 盘中异动推送未能送达，请检查网络或Token。")
-        return success
+        return self._dispatch_push(title, markdown_body, log_tag="盘中异动推送")
 
     def push_intraday_event(self, event: IntradayEvent) -> bool:
         """单只标的异动快捷推送"""
