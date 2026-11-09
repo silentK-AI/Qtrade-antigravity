@@ -7,10 +7,11 @@
 4. WxPusher (微信推送平台) —— 免费微信公众号消息触达
 """
 
+import time
 import json
 import urllib.request
 import urllib.parse
-from typing import List, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional
 from config import WeChatNotifyConfig
 from models.stock_item import StrategySignal, PostMarketReportData
 
@@ -64,16 +65,38 @@ class WeChatPusher:
         lines.append(f"\n*量化策略系统自动监控推送，交易有风险，请遵守交易纪律*")
         return "\n".join(lines)
 
-    def send_pushplus(self, title: str, content_markdown: str) -> bool:
-        """通过 PushPlus (推送加) 发送到个人微信"""
-        if not self.config.PUSHPLUS_TOKEN:
-            return False
+    def _split_markdown_chunks(self, text: str, max_chars: int = 12000) -> List[str]:
+        """按段落或分隔线智能切分 Markdown，避免截断单行内容"""
+        if len(text) <= max_chars:
+            return [text]
 
+        chunks = []
+        lines = text.split("\n")
+        current_chunk = []
+        current_len = 0
+
+        for line in lines:
+            line_len = len(line) + 1
+            if current_len + line_len > max_chars and current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = [line]
+                current_len = line_len
+            else:
+                current_chunk.append(line)
+                current_len += line_len
+
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+
+        return chunks
+
+    def _send_pushplus_payload(self, title: str, content: str) -> Tuple[bool, Dict[str, Any]]:
+        """执行单次 PushPlus HTTP 请求"""
         url = "http://www.pushplus.plus/send"
         payload = {
             "token": self.config.PUSHPLUS_TOKEN,
             "title": title,
-            "content": content_markdown,
+            "content": content,
             "template": "markdown"
         }
         try:
@@ -83,14 +106,53 @@ class WeChatPusher:
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                if result.get("code") != 200:
-                    print(f"[微信推送失败] PushPlus 接口返回: {result}")
-                return result.get("code") == 200
+                return (result.get("code") == 200, result)
         except Exception as e:
-            print(f"[微信推送异常] PushPlus 发送失败: {e}")
+            return (False, {"code": -1, "msg": str(e)})
+
+    def send_pushplus(self, title: str, content_markdown: str) -> bool:
+        """通过 PushPlus (推送加) 发送到微信，含超长自动分段发送与容错重发保护"""
+        if not self.config.PUSHPLUS_TOKEN:
             return False
+
+        # 1. 预先保护：若内容字数超过安全阈值（12,000字，远低于通道20,000上限），主动切分多段分批发送
+        chunks = self._split_markdown_chunks(content_markdown, max_chars=12000)
+        if len(chunks) > 1:
+            print(f"[微信推送防护] 内容总长 {len(content_markdown)} 字，已自动切分为 {len(chunks)} 段分批推送...")
+            all_success = True
+            for i, chunk in enumerate(chunks, 1):
+                chunk_title = f"{title} (分段 {i}/{len(chunks)})"
+                ok, res = self._send_pushplus_payload(chunk_title, chunk)
+                if not ok:
+                    print(f"[微信推送失败] 分段 {i} 推送异常: {res}")
+                    all_success = False
+                time.sleep(1)
+            return all_success
+
+        # 2. 单段正常发送
+        success, res = self._send_pushplus_payload(title, content_markdown)
+        if success:
+            return True
+
+        # 3. 容错保护：若服务端返回内容过大 (code 999 或提示超长)，自动降级强制切成两段重新补发
+        err_msg = str(res.get("msg", "")) + str(res.get("data", ""))
+        if res.get("code") == 999 or "过大" in err_msg or "超过" in err_msg or "2万" in err_msg:
+            print(f"[微信推送熔断保护] 检测到服务端拒绝超长内容 ({err_msg})，立即启动紧急切分多段重发机制...")
+            half_chunks = self._split_markdown_chunks(content_markdown, max_chars=max(len(content_markdown) // 2 + 100, 1000))
+            all_ok = True
+            for i, chunk in enumerate(half_chunks, 1):
+                chunk_title = f"{title} (补发分段 {i}/{len(half_chunks)})"
+                ok, r = self._send_pushplus_payload(chunk_title, chunk)
+                if not ok:
+                    print(f"[微信推送重发失败] 分段 {i} 仍失败: {r}")
+                    all_ok = False
+                time.sleep(1)
+            return all_ok
+
+        print(f"[微信推送失败] PushPlus 接口返回: {res}")
+        return False
 
     def send_serverchan(self, title: str, content_markdown: str) -> bool:
         """通过 Server酱 发送到微信"""
