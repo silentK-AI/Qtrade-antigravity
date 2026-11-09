@@ -1,0 +1,17 @@
+[Unit]
+Description=A-Share Limit Up Screener & WeChat Push Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/quant_system
+ExecStart=/usr/bin/python3 daemon_scheduler.py --source live
+Restart=always
+RestartSec=10
+EnvironmentFile=-/opt/quant_system/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+
+[Install]
+WantedBy=multi-user.target

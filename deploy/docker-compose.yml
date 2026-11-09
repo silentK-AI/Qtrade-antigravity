@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  quant-screener:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: quant_limit_up_screener
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ../config.py:/app/config.py
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,14 @@
+# Linux Crontab 定时配置参考 (周一至周五交易日触发)
+# 使用方法: crontab -e 然后将以下行复制进去
+
+# 09:23:05 触发早盘抢筹锁板模式并推送微信
+23 9 * * 1-5 cd /opt/quant_system && /usr/bin/python3 run.py --mode 0923 --source live >> /var/log/quant.log 2>&1
+
+# 09:25:05 触发开盘精选打板模式并推送微信
+25 9 * * 1-5 cd /opt/quant_system && /usr/bin/python3 run.py --mode morning --source live >> /var/log/quant.log 2>&1
+
+# 14:50:00 触发尾盘放量蓄势冲板模式并推送微信
+50 14 * * 1-5 cd /opt/quant_system && /usr/bin/python3 run.py --mode closing --source live >> /var/log/quant.log 2>&1
+
+# 14:58:05 触发尾盘集合竞价锁定模式并推送微信
+58 14 * * 1-5 cd /opt/quant_system && /usr/bin/python3 run.py --mode 1458 --source live >> /var/log/quant.log 2>&1
