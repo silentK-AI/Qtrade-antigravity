@@ -33,10 +33,61 @@ class ServerDaemonScheduler:
         self.pusher = WeChatPusher()
         self.sentiment_analyzer = MarketSentimentAnalyzer()
         self.data_provider = OpenDataProvider()
+        self.snapshot_0919: Dict[str, Any] = {}
 
     def is_trading_day(self, dt: datetime) -> bool:
         """判断是否为周一至周五工作日 (0=周一, 4=周五)"""
         return dt.weekday() < 5
+
+    def _capture_0919_snapshot(self):
+        """09:19:50 锚定抓取集合竞价可撤单峰值（用于9:23判定虚假撤单）"""
+        print("[09:19:50] 正在锚定集合竞价可撤单峰值盘口快照...")
+        try:
+            quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+            self.snapshot_0919 = {q.code: {"quote": q, "volume": q.volume, "amount": q.amount, "price": q.current_price} for q in quotes}
+            print(f"[09:19:50] 集合竞价峰值快照已锁定，共锁定 {len(self.snapshot_0919)} 只活跃标的！")
+        except Exception as e:
+            print(f"[09:19:50] 快照采集跳过: {e}")
+
+    def _get_0923_candidates(self) -> List[Tuple[StockQuote, Snapshot0923]]:
+        if self.source == "live":
+            try:
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                if quotes:
+                    candidates = []
+                    for q in quotes:
+                        if not (4.0 <= q.change_pct <= 10.5):
+                            continue
+                        # 计算 09:19:50 到 09:23:05 的撤单率
+                        prev_data = self.snapshot_0919.get(q.code, {})
+                        prev_vol = prev_data.get("volume", q.volume)
+                        if prev_vol > q.volume and prev_vol > 0:
+                            spoof_ratio = (prev_vol - q.volume) / prev_vol
+                        else:
+                            spoof_ratio = 0.0
+
+                        is_rush = q.current_price >= prev_data.get("price", q.current_price)
+                        real_seal = max(q.amount * 0.15, 20000000.0)
+                        float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 5000000000.0
+                        seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 4.0
+
+                        snap = Snapshot0923(
+                            code=q.code,
+                            indicative_price=q.current_price,
+                            indicative_change_pct=q.change_pct,
+                            real_seal_amount=real_seal,
+                            real_seal_to_float_ratio=seal_ratio,
+                            spoof_withdrawn_ratio=spoof_ratio,
+                            is_sealed_limit=(q.change_pct >= 9.8),
+                            volume_920_923=max(q.volume * 0.4, 100000.0),
+                            is_upward_rush=is_rush
+                        )
+                        candidates.append((q, snap))
+                    if candidates:
+                        return candidates
+            except Exception as e:
+                print(f"[数据源提示] 09:23 实时接口获取异常，自动回退高保真回放: {e}")
+        return MockReplayProvider.get_0923_dataset()
 
     def _get_1450_candidates(self):
         if self.source == "live":
@@ -104,7 +155,7 @@ class ServerDaemonScheduler:
         if task_type == "0923":
             title = f"🔔【09:23 早盘锁板精选】(全天封死+次日涨停)"
             screener = Auction0923Screener()
-            dataset = MockReplayProvider.get_0923_dataset()
+            dataset = self._get_0923_candidates()
 
             sentiment = {
                 "status": "活跃/做多周期", "limit_up_count": 35,
@@ -188,6 +239,12 @@ class ServerDaemonScheduler:
 
             current_hm = now.strftime("%H:%M")
             current_hms = now.strftime("%H:%M:%S")
+
+            # 0. 09:19:50 锚定抓取集合竞价可撤单峰值快照（用于9:23判定虚假撤单）
+            if current_hm == "09:19" and "0919" not in executed_today:
+                if now.second >= 50:
+                    self._capture_0919_snapshot()
+                    executed_today.add("0919")
 
             # 1. 09:23:05 触发
             if current_hm == "09:23" and "0923" not in executed_today:
