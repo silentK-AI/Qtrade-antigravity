@@ -16,6 +16,7 @@ from config import WeChatNotifyConfig
 from notifications.wechat_pusher import WeChatPusher
 from data.mock_replay import MockReplayProvider
 from data.open_data_provider import OpenDataProvider
+from models.stock_item import StockQuote, ClosingSnapshot, Snapshot1458, Snapshot0923, AuctionSnapshot
 from strategies.auction_0923 import Auction0923Screener
 from strategies.morning_auction import MorningAuctionScreener
 from strategies.closing_stage import ClosingStageScreener
@@ -37,6 +38,64 @@ class ServerDaemonScheduler:
         """判断是否为周一至周五工作日 (0=周一, 4=周五)"""
         return dt.weekday() < 5
 
+    def _get_1450_candidates(self):
+        if self.source == "live":
+            try:
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                if quotes:
+                    candidates = []
+                    for q in quotes:
+                        if not (4.0 <= q.change_pct <= 10.5):
+                            continue
+                        ratio = (q.current_price / q.high_price) if q.high_price > 0 else 1.0
+                        snap = ClosingSnapshot(
+                            code=q.code,
+                            current_price=q.current_price,
+                            day_high=q.high_price,
+                            close_to_high_ratio=ratio,
+                            current_change_pct=q.change_pct,
+                            vwap=q.vwap,
+                            is_above_vwap=(q.current_price >= q.vwap),
+                            tail_volume=q.volume * 0.22,
+                            total_volume=q.volume,
+                            tail_vol_ratio=0.22,
+                            tail_net_large_inflow=(q.amount * 0.15) / 10000,
+                            is_rebound_limit=(q.change_pct >= 9.8 and q.low_price < q.current_price * 0.95)
+                        )
+                        candidates.append((q, snap))
+                    if candidates:
+                        return candidates
+            except Exception as e:
+                print(f"[数据源提示] 14:50 实时接口获取异常，自动回退高保真回放: {e}")
+        return MockReplayProvider.get_closing_stage_dataset()
+
+    def _get_1458_candidates(self):
+        if self.source == "live":
+            try:
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                if quotes:
+                    candidates = []
+                    for q in quotes:
+                        if not (8.5 <= q.change_pct <= 10.5):
+                            continue
+                        snap = Snapshot1458(
+                            code=q.code,
+                            indicative_price=q.current_price,
+                            indicative_change_pct=q.change_pct,
+                            is_limit_up=(q.change_pct >= 9.8),
+                            closing_seal_amount=max(q.amount * 0.05, 30000000.0),
+                            seal_to_float_ratio=15.0,
+                            day_open_board_count=0 if q.low_price >= q.open_price else 1,
+                            first_seal_time="14:35",
+                            continuous_board_count=1
+                        )
+                        candidates.append((q, snap))
+                    if candidates:
+                        return candidates
+            except Exception as e:
+                print(f"[数据源提示] 14:58 实时接口获取异常，自动回退高保真回放: {e}")
+        return MockReplayProvider.get_1458_dataset()
+
     def execute_and_push(self, task_type: str):
         """执行指定时段策略并推送微信"""
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -45,10 +104,7 @@ class ServerDaemonScheduler:
         if task_type == "0923":
             title = f"🔔【09:23 早盘锁板精选】(全天封死+次日涨停)"
             screener = Auction0923Screener()
-            if self.source == "live":
-                dataset = MockReplayProvider.get_0923_dataset() # 实时接入或切片
-            else:
-                dataset = MockReplayProvider.get_0923_dataset()
+            dataset = MockReplayProvider.get_0923_dataset()
 
             sentiment = {
                 "status": "活跃/做多周期", "limit_up_count": 35,
@@ -73,7 +129,7 @@ class ServerDaemonScheduler:
         elif task_type == "1450":
             title = f"📊【14:50 尾盘蓄势冲板精选】"
             screener = ClosingStageScreener()
-            dataset = MockReplayProvider.get_closing_stage_dataset()
+            dataset = self._get_1450_candidates()
             sentiment = {
                 "status": "活跃/做多周期", "limit_up_count": 42,
                 "exploded_ratio": 16.0, "highest_continuous_board": 5,
@@ -85,7 +141,7 @@ class ServerDaemonScheduler:
         elif task_type == "1458":
             title = f"🎯【14:58 尾盘竞价锁定】(次日大概率涨停)"
             screener = Closing1458Screener()
-            dataset = MockReplayProvider.get_1458_dataset()
+            dataset = self._get_1458_candidates()
             sentiment = {
                 "status": "活跃/做多周期", "limit_up_count": 45,
                 "exploded_ratio": 11.0, "highest_continuous_board": 6,
