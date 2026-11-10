@@ -42,6 +42,7 @@ class ServerDaemonScheduler:
         self.sentiment_analyzer = MarketSentimentAnalyzer()
         self.data_provider = OpenDataProvider()
         self.snapshot_0919: Dict[str, Any] = {}
+        self.snapshot_1430: Dict[str, float] = {}  # 14:30 锚定成交量快照 (code -> volume)
         self.intraday_monitor = IntradayMonitor(self.data_provider)
         self.history_tracker = SignalHistoryTracker()
         self.last_intraday_poll_ts: float = 0.0
@@ -60,6 +61,16 @@ class ServerDaemonScheduler:
             print(f"[09:19:50] 集合竞价峰值快照已锁定，共锁定 {len(self.snapshot_0919)} 只活跃标的！")
         except Exception as e:
             print(f"[09:19:50] 快照采集跳过: {e}")
+
+    def _capture_1430_snapshot(self):
+        """14:30:00 锁定尾盘基准成交量快照（用于14:50精准计算尾盘真实放量占比）"""
+        print("[14:30:00] 正在锁定 14:30 尾盘量能基准快照...")
+        try:
+            quotes = self.data_provider.fetch_main_board_top_active(page_size=150)
+            self.snapshot_1430 = {q.code: q.volume for q in quotes}
+            print(f"[14:30:00] 尾盘基准量能快照已锁定，共记录 {len(self.snapshot_1430)} 只标的！")
+        except Exception as e:
+            print(f"[14:30:00] 尾盘快照采集跳过: {e}")
 
     def _get_0923_candidates(self) -> List[Tuple[StockQuote, Snapshot0923]]:
         if self.source == "live":
@@ -82,9 +93,12 @@ class ServerDaemonScheduler:
                             spoof_ratio = 0.0
 
                         is_rush = rq.current_price >= prev_data.get("price", rq.current_price)
-                        real_seal = (rq.buy1_price * rq.buy1_volume) if rq.buy1_volume > 0 else (rq.amount * 0.15)
-                        float_cap = rq.float_market_cap * 100000000.0 if rq.float_market_cap > 0 else 5000000000.0
-                        seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 4.0
+                        real_seal = (rq.buy1_price * rq.buy1_volume) if rq.buy1_volume > 0 else 0.0
+                        float_cap = rq.float_market_cap * 100000000.0 if rq.float_market_cap > 0 else 0.0
+                        seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 0.0
+
+                        vol_0919 = prev_data.get("volume", 0.0)
+                        vol_920_923 = max(0.0, rq.volume - vol_0919) if vol_0919 > 0 else rq.volume
 
                         snap = Snapshot0923(
                             code=rq.code,
@@ -93,8 +107,8 @@ class ServerDaemonScheduler:
                             real_seal_amount=real_seal,
                             real_seal_to_float_ratio=seal_ratio,
                             spoof_withdrawn_ratio=spoof_ratio,
-                            is_sealed_limit=(rq.change_pct >= 9.8),
-                            volume_920_923=max(rq.volume * 0.4, 100000.0),
+                            is_sealed_limit=(rq.change_pct >= 9.8 and rq.buy1_volume > 0),
+                            volume_920_923=vol_920_923,
                             is_upward_rush=is_rush
                         )
                         candidates.append((rq, snap))
@@ -117,6 +131,7 @@ class ServerDaemonScheduler:
                 codes = [q.code for q in gap_quotes[:40]]
                 real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
                 yesterday_zt = {item["code"]: item for item in self.data_provider.fetch_yesterday_limit_up_pool()}
+                prev_day_vols = self.data_provider.fetch_prev_day_volumes(codes)
 
                 candidates = []
                 for q in gap_quotes:
@@ -128,9 +143,9 @@ class ServerDaemonScheduler:
 
                     unmatched_vol = rq.buy1_volume
                     unmatched_amt = rq.buy1_price * unmatched_vol
-                    strength = (rq.buy1_volume / rq.sell1_volume) if rq.sell1_volume > 0 else (5.0 if rq.buy1_volume > 0 else 1.0)
-                    prev_day_vol = (rq.amount / rq.current_price * 5.0) if rq.current_price > 0 else max(rq.volume * 5.0, 1.0)
-                    vol_ratio = (rq.volume / prev_day_vol) if prev_day_vol > 0 else 0.08
+                    strength = (rq.buy1_volume / rq.sell1_volume) if rq.sell1_volume > 0 else (10.0 if rq.buy1_volume > 0 else 1.0)
+                    prev_day_vol = prev_day_vols.get(rq.code, 0.0)
+                    vol_ratio = (rq.volume / prev_day_vol) if prev_day_vol > 0 else 0.0
 
                     snap = AuctionSnapshot(
                         code=rq.code,
@@ -177,13 +192,13 @@ class ServerDaemonScheduler:
                 }
 
         return {
-            "status": "活跃/做多周期",
-            "limit_up_count": 35,
+            "status": "离线测试/数据同步中",
+            "limit_up_count": 0,
             "limit_down_count": 0,
-            "exploded_ratio": 12.5,
-            "highest_continuous_board": 5,
-            "top_theme": "主板核心热点",
-            "risk_advice": "聚焦有板块梯队配合的核心前排标的。",
+            "exploded_ratio": 0.0,
+            "highest_continuous_board": 0,
+            "top_theme": "数据同步中",
+            "risk_advice": "当前处于离线测试模式，数据未连接线上。",
             "sentiment_multiplier": 1.0
         }
 
@@ -197,6 +212,17 @@ class ServerDaemonScheduler:
                         if not (4.0 <= q.change_pct <= 10.5):
                             continue
                         ratio = (q.current_price / q.high_price) if q.high_price > 0 else 1.0
+
+                        vol_1430 = self.snapshot_1430.get(q.code, 0.0)
+                        if vol_1430 > 0 and q.volume >= vol_1430:
+                            tail_vol = q.volume - vol_1430
+                            tail_ratio = tail_vol / q.volume
+                        else:
+                            tail_vol = 0.0
+                            tail_ratio = 0.0
+
+                        tail_inflow_wan = q.net_large_inflow / 10000.0
+
                         snap = ClosingSnapshot(
                             code=q.code,
                             current_price=q.current_price,
@@ -205,10 +231,10 @@ class ServerDaemonScheduler:
                             current_change_pct=q.change_pct,
                             vwap=q.vwap,
                             is_above_vwap=(q.current_price >= q.vwap),
-                            tail_volume=q.volume * 0.22,
+                            tail_volume=tail_vol,
                             total_volume=q.volume,
-                            tail_vol_ratio=0.22,
-                            tail_net_large_inflow=(q.amount * 0.15) / 10000,
+                            tail_vol_ratio=tail_ratio,
+                            tail_net_large_inflow=tail_inflow_wan,
                             is_rebound_limit=(q.change_pct >= 9.8 and q.low_price < q.current_price * 0.95)
                         )
                         candidates.append((q, snap))
@@ -229,15 +255,15 @@ class ServerDaemonScheduler:
                         if not (5.5 <= q.change_pct <= 10.5):
                             continue
                         detail = zt_details.get(q.code, {})
-                        fbt = detail.get("first_seal_time", "09:30:00" if q.change_pct >= 9.8 else "未封板")
+                        fbt = detail.get("first_seal_time", "")
                         lbt = detail.get("last_seal_time", fbt)
-                        zbc = detail.get("open_board_count", 0)
-                        fund = detail.get("seal_amount", max(q.amount * 0.05, 30000000.0))
-                        lbc = detail.get("continuous_boards", 1)
+                        zbc = int(detail.get("open_board_count", 0) or 0)
+                        fund = float(detail.get("seal_amount", 0.0) or 0.0)
+                        lbc = int(detail.get("continuous_boards", 1 if q.change_pct >= 9.8 else 0) or 0)
 
-                        is_lu = (q.change_pct >= 9.8)
-                        float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 5000000000.0
-                        seal_ratio = (fund / float_cap * 1000.0) if float_cap > 0 else 5.0
+                        is_lu = (q.change_pct >= 9.8 and (detail or (q.buy1_volume > 0 and q.sell1_volume == 0)))
+                        float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 0.0
+                        seal_ratio = (fund / float_cap * 1000.0) if float_cap > 0 else 0.0
 
                         snap = Snapshot1458(
                             code=q.code,
@@ -350,11 +376,11 @@ class ServerDaemonScheduler:
         except Exception as e:
             logger.warning(f"获取真实涨停测试数据失败: {e}")
 
-        # 降级备用测试卡片（明确标注通道测试字样）
+        # 降级备用测试卡片（明确标注通道测试字样，不使用任何真实股票代码）
         ev1 = IntradayEvent(
             event_type="LIMIT_UP",
-            code="000001",
-            name="微信推送通道测试",
+            code="TEST01",
+            name="微信通道连通测试",
             current_price=10.00,
             change_pct=10.00,
             event_time=get_beijing_now().strftime("%H:%M:%S"),
@@ -432,6 +458,11 @@ class ServerDaemonScheduler:
                     if now.second >= 5:
                         self.execute_and_push("0925")
                         executed_today.add("0925")
+
+                # 2.5 14:30:00 锁定尾盘基准量能快照
+                elif current_hm == "14:30" and "1430" not in executed_today:
+                    self._capture_1430_snapshot()
+                    executed_today.add("1430")
 
                 # 3. 14:50:00 触发
                 elif current_hm == "14:50" and "1450" not in executed_today:

@@ -8,7 +8,7 @@ import time
 import json
 import urllib.request
 import urllib.parse
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from models.stock_item import StockQuote
 from utils.filters import StockFilter
 from utils.calendar import get_beijing_now
@@ -156,11 +156,12 @@ class OpenDataProvider:
         从公开榜单接口抓取主板当下最活跃/涨幅居前的股票池
         """
         # 东财官方纯沪深主板榜单 (m:0+t:6 为深市主板; m:1+t:2 为沪市主板，精准排除创业板与科创板)
+        # 增加 f62 字段获取真实实时主力资金净买入额 (元)
         url = (
             "https://push2.eastmoney.com/api/qt/clist/get?"
             "pn=1&pz=200&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
             "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:1+t:2"
-            "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21"
+            "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62"
         )
         try:
             content = self._get_url_content(url)
@@ -181,6 +182,7 @@ class OpenDataProvider:
                 pre_close = float(item.get("f18", 0.0) or curr)
                 total_cap = float(item.get("f20", 0.0) or 0.0) / 100000000
                 float_cap = float(item.get("f21", 0.0) or 0.0) / 100000000
+                net_inflow = float(item.get("f62", 0.0) or 0.0)
 
                 quote = StockQuote(
                     code=code,
@@ -198,13 +200,43 @@ class OpenDataProvider:
                     float_market_cap=float_cap,
                     total_market_cap=total_cap,
                     vwap=(amount / volume) if volume > 0 else curr,
-                    is_limit_up=(change_pct >= 9.9)
+                    is_limit_up=(change_pct >= 9.9),
+                    net_large_inflow=net_inflow
                 )
                 if self.filter.filter_quote(quote):
                     quotes.append(quote)
             return quotes
         except Exception:
             return []
+
+    def fetch_prev_day_volumes(self, codes: List[str]) -> Dict[str, float]:
+        """
+        并发抓取股票前一交易日的真实全天成交量（股），用于 09:25 集合竞价真实爆量比计算
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_single(code: str) -> Tuple[str, float]:
+            market = 0 if code.startswith(("0", "3")) else 1
+            url = (
+                f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+                f"secid={market}.{code}&fields1=f1&fields2=f51,f56&klt=101&fqt=0&end=20500101&lmt=2"
+            )
+            try:
+                content = self._get_url_content(url)
+                data = json.loads(content)
+                klines = data.get("data", {}).get("klines", [])
+                if len(klines) >= 2:
+                    return code, float(klines[0].split(",")[1]) * 100.0
+                elif len(klines) == 1:
+                    return code, float(klines[0].split(",")[1]) * 100.0
+            except Exception:
+                pass
+            return code, 0.0
+
+        if not codes:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(10, len(codes))) as executor:
+            return dict(executor.map(_fetch_single, codes))
 
     def fetch_yesterday_limit_up_pool(self) -> List[Dict[str, Any]]:
         """

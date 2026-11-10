@@ -14,6 +14,28 @@ from models.stock_item import StockQuote, Snapshot1458, StrategySignal
 from strategies.base_screener import BaseScreener
 
 
+def _is_valid_time_str(t: str) -> bool:
+    """严格检验是否为合法的 HH:MM 或 HH:MM:SS 格式，杜绝 '未封板' 等中文字符串参与时间大小比较"""
+    if not t or not isinstance(t, str):
+        return False
+    parts = t.strip().split(":")
+    return len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit()
+
+
+def _time_le(t: str, target: str) -> bool:
+    """安全判断 t <= target，非时间字符串返回 False"""
+    if not _is_valid_time_str(t) or not _is_valid_time_str(target):
+        return False
+    return t[:5] <= target[:5]
+
+
+def _time_ge(t: str, target: str) -> bool:
+    """安全判断 t >= target，非时间字符串返回 False"""
+    if not _is_valid_time_str(t) or not _is_valid_time_str(target):
+        return False
+    return t[:5] >= target[:5]
+
+
 class Closing1458Screener(BaseScreener):
     """14:58 尾盘集合竞价可买入与次日涨停选股器"""
 
@@ -39,9 +61,9 @@ class Closing1458Screener(BaseScreener):
         zbc = snap.day_open_board_count
 
         # -----------------------------------------------------------------
-        # 场景一：早盘极早封死 (首次封板 <= 10:30，且无炸板或早早回封) —— 绝对买不进去！
+        # 场景一：早盘极早封死 (首次封板 <= 10:30，且无炸板或早早回封 <= 11:30) —— 绝对买不进去！
         # -----------------------------------------------------------------
-        if snap.is_limit_up and (first_time <= "10:30" and (zbc == 0 or last_time <= "11:30")):
+        if snap.is_limit_up and (_time_le(first_time, "10:30") and (zbc == 0 or _time_le(last_time, "11:30"))):
             factors["【可买入性】"] = f"❌ 队列已堵死！早盘 {first_time} 已封死，排单过厚，14:58挂单买不进"
             factors["【实战定位】"] = "板块情绪定海神针 / 持筹者锁仓标杆"
             factors["【资金】排队封单规模"] = f"封单 {seal_wan:.0f} 万元 (首次封板: {first_time})"
@@ -51,9 +73,9 @@ class Closing1458Screener(BaseScreener):
             raw_score, raw_cap = 98.0, 60.0
 
         # -----------------------------------------------------------------
-        # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板时间 >= 14:00，或盘中炸板多次尾盘压哨回封)
+        # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板时间 >= 14:00，或首次封板时间 >= 14:00，或盘中炸板多次尾盘 >= 13:30 压哨回封)
         # -----------------------------------------------------------------
-        elif snap.is_limit_up and (last_time >= "14:00" or first_time >= "14:00" or (zbc >= 1 and last_time >= "13:30")):
+        elif snap.is_limit_up and (_time_ge(last_time, "14:00") or _time_ge(first_time, "14:00") or (zbc >= 1 and _time_ge(last_time, "13:30"))):
             factors["【可买入性】"] = f"✅ 能够买进！最后回封时间为 {last_time} (盘中炸板 {zbc} 次)，抛盘充分换手，排单成交率高"
             factors["【资金承接】"] = f"尾盘排单 {seal_wan:.0f} 万元，多头尾盘突袭锁单"
             factors["【换手硬度】"] = f"全天充分换手 {quote.turnover_rate:.1f}%，筹码洗净"

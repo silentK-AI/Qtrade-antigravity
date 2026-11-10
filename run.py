@@ -41,14 +41,14 @@ def run_0923_mode(source: str = "live", codes_filter: list = None):
     if source == "mock":
         dataset = MockReplayProvider.get_0923_dataset()
         sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 35,
-            "limit_down_count": 1,
-            "exploded_ratio": 12.5,
-            "highest_continuous_board": 5,
-            "top_theme": "西部大开发 / 算力主线",
-            "risk_advice": "不可撤单阶段多头主力真金白银顶死，建议果断参与最强前排。",
-            "sentiment_multiplier": 1.05
+            "status": "离线仿真测试",
+            "limit_up_count": len([q for q, _ in dataset if q.is_limit_up]),
+            "limit_down_count": 0,
+            "exploded_ratio": 0.0,
+            "highest_continuous_board": 1,
+            "top_theme": "离线测试标的",
+            "risk_advice": "当前处于本地离线回放模式，展示历史仿真切片。",
+            "sentiment_multiplier": 1.00
         }
         TerminalVisualizer.print_sentiment_summary(sentiment)
 
@@ -84,14 +84,14 @@ def run_1458_mode(source: str = "live", codes_filter: list = None):
     if source == "mock":
         dataset = MockReplayProvider.get_1458_dataset()
         sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 45,
-            "limit_down_count": 1,
-            "exploded_ratio": 11.0,
-            "highest_continuous_board": 6,
-            "top_theme": "创新药 / 新质生产力",
-            "risk_advice": "全天抗炸板金身不破，收盘巨资死封，次日享受大概率直接高开冲板。",
-            "sentiment_multiplier": 1.05
+            "status": "离线仿真测试",
+            "limit_up_count": len([q for q, _ in dataset if q.is_limit_up]),
+            "limit_down_count": 0,
+            "exploded_ratio": 0.0,
+            "highest_continuous_board": 1,
+            "top_theme": "离线测试标的",
+            "risk_advice": "当前处于本地离线回放模式，展示历史仿真切片。",
+            "sentiment_multiplier": 1.00
         }
         TerminalVisualizer.print_sentiment_summary(sentiment)
 
@@ -125,14 +125,14 @@ def run_morning_mode(source: str = "live", codes_filter: list = None):
     if source == "mock":
         dataset = MockReplayProvider.get_morning_auction_dataset()
         sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 38,
-            "limit_down_count": 1,
-            "exploded_ratio": 13.6,
-            "highest_continuous_board": 5,
-            "top_theme": "低空经济 / 算力协同",
-            "risk_advice": "市场短线情绪高涨，首板晋级二板及主线龙头赚钱效应显著，可积极参与优质竞价异动标的。",
-            "sentiment_multiplier": 1.05
+            "status": "离线仿真测试",
+            "limit_up_count": len([q for q, _ in dataset if q.is_limit_up]),
+            "limit_down_count": 0,
+            "exploded_ratio": 0.0,
+            "highest_continuous_board": 1,
+            "top_theme": "离线测试标的",
+            "risk_advice": "当前处于本地离线回放模式，展示历史仿真切片。",
+            "sentiment_multiplier": 1.00
         }
         TerminalVisualizer.print_sentiment_summary(sentiment)
         
@@ -167,14 +167,14 @@ def run_closing_mode(source: str = "live", codes_filter: list = None):
     if source == "mock":
         dataset = MockReplayProvider.get_closing_stage_dataset()
         sentiment = {
-            "status": "活跃/做多周期",
-            "limit_up_count": 42,
-            "limit_down_count": 2,
-            "exploded_ratio": 16.0,
-            "highest_continuous_board": 5,
-            "top_theme": "高端制造 / 商业航天",
-            "risk_advice": "市场赚钱效应扩散，尾盘蓄势抢筹标的次日冲板动能充沛，可适度建仓捕捉溢价。",
-            "sentiment_multiplier": 1.05
+            "status": "离线仿真测试",
+            "limit_up_count": len([q for q, _ in dataset if q.is_limit_up]),
+            "limit_down_count": 0,
+            "exploded_ratio": 0.0,
+            "highest_continuous_board": 1,
+            "top_theme": "离线测试标的",
+            "risk_advice": "当前处于本地离线回放模式，展示历史仿真切片。",
+            "sentiment_multiplier": 1.00
         }
         TerminalVisualizer.print_sentiment_summary(sentiment)
         

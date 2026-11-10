@@ -95,9 +95,9 @@ class MarketSentimentAnalyzer:
     def evaluate_sentiment(
         self,
         quotes: List[StockQuote],
-        exploded_count: int = 8,
-        highest_continuous_board: int = 5,
-        top_theme: str = "低空经济 / 商业航天"
+        exploded_count: int = 0,
+        highest_continuous_board: int = 1,
+        top_theme: str = "主板全市场轮动"
     ) -> Dict[str, Any]:
         """
         评估当前全市场短线情绪

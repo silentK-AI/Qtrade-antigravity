@@ -73,24 +73,21 @@ class LimitUpModule:
         else:
             if task_type == "0923":
                 dataset = MockReplayProvider.get_0923_dataset()
-                top_theme = "西部大开发 / 算力主线"
             elif task_type == "0925":
                 dataset = MockReplayProvider.get_morning_auction_dataset()
-                top_theme = "低空经济 / 算力协同"
             elif task_type == "1450":
                 dataset = MockReplayProvider.get_closing_stage_dataset()
-                top_theme = "高端制造 / 商业航天"
             else:
                 dataset = MockReplayProvider.get_1458_dataset()
-                top_theme = "创新药 / 新质生产力"
 
             sentiment = {
-                "status": "活跃/做多周期",
-                "limit_up_count": 38,
-                "exploded_ratio": 12.5,
-                "highest_continuous_board": 5,
-                "top_theme": top_theme,
-                "sentiment_multiplier": 1.05
+                "status": "离线仿真测试",
+                "limit_up_count": len([q for q, _ in dataset if q.is_limit_up]),
+                "limit_down_count": 0,
+                "exploded_ratio": 0.0,
+                "highest_continuous_board": 1,
+                "top_theme": "离线测试标的",
+                "sentiment_multiplier": 1.00
             }
             return dataset, sentiment
 

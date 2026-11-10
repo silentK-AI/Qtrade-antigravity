@@ -35,6 +35,7 @@ class StockQuote:
     buy1_volume: float = 0.0       # 买一挂单量（股）
     sell1_price: float = 0.0       # 卖一挂单价
     sell1_volume: float = 0.0      # 卖一挂单量（股）
+    net_large_inflow: float = 0.0  # 主力大单净买入额（元）
 
 
 @dataclass
@@ -46,7 +47,7 @@ class AuctionSnapshot:
     auction_volume: float          # 9:25 竞价成交量（股）
     auction_amount: float          # 9:25 竞价成交额（元）
     prev_day_volume: float = 0.0   # 前一日全天成交量（股）
-    auction_vol_ratio: float = 0.08# 竞价成交量占前一日成交量比例 (0.0 ~ 1.0)
+    auction_vol_ratio: float = 0.0 # 竞价成交量占前一日成交量比例 (0.0 ~ 1.0)
     unmatched_buy_volume: float = 0.0# 9:25 集合竞价未匹配买单量（买一挂单排队余量）
     unmatched_amount: float = 0.0  # 9:25 未匹配买单总金额（元）
     bid_ask_strength: float = 1.0  # 盘口抢筹买卖意愿强弱比
