@@ -66,72 +66,90 @@ class ServerDaemonScheduler:
             try:
                 quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
                 if quotes:
+                    gap_quotes = [q for q in quotes if (4.0 <= q.change_pct <= 10.5)]
+                    # 抓取腾讯真实五档深度盘口 (获取买一挂单量与买一金额)
+                    codes = [q.code for q in gap_quotes[:40]]
+                    real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
                     candidates = []
-                    for q in quotes:
-                        if not (4.0 <= q.change_pct <= 10.5):
-                            continue
+                    for q in gap_quotes:
+                        rq = real_quotes.get(q.code, q)
                         # 计算 09:19:50 到 09:23:05 的撤单率
-                        prev_data = self.snapshot_0919.get(q.code, {})
-                        prev_vol = prev_data.get("volume", q.volume)
-                        if prev_vol > q.volume and prev_vol > 0:
-                            spoof_ratio = (prev_vol - q.volume) / prev_vol
+                        prev_data = self.snapshot_0919.get(rq.code, {})
+                        prev_vol = prev_data.get("volume", rq.volume)
+                        if prev_vol > rq.volume and prev_vol > 0:
+                            spoof_ratio = (prev_vol - rq.volume) / prev_vol
                         else:
                             spoof_ratio = 0.0
 
-                        is_rush = q.current_price >= prev_data.get("price", q.current_price)
-                        real_seal = max(q.amount * 0.15, 20000000.0)
-                        float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 5000000000.0
+                        is_rush = rq.current_price >= prev_data.get("price", rq.current_price)
+                        real_seal = (rq.buy1_price * rq.buy1_volume) if rq.buy1_volume > 0 else (rq.amount * 0.15)
+                        float_cap = rq.float_market_cap * 100000000.0 if rq.float_market_cap > 0 else 5000000000.0
                         seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 4.0
 
                         snap = Snapshot0923(
-                            code=q.code,
-                            indicative_price=q.current_price,
-                            indicative_change_pct=q.change_pct,
+                            code=rq.code,
+                            indicative_price=rq.current_price,
+                            indicative_change_pct=rq.change_pct,
                             real_seal_amount=real_seal,
                             real_seal_to_float_ratio=seal_ratio,
                             spoof_withdrawn_ratio=spoof_ratio,
-                            is_sealed_limit=(q.change_pct >= 9.8),
-                            volume_920_923=max(q.volume * 0.4, 100000.0),
+                            is_sealed_limit=(rq.change_pct >= 9.8),
+                            volume_920_923=max(rq.volume * 0.4, 100000.0),
                             is_upward_rush=is_rush
                         )
-                        candidates.append((q, snap))
-                    if candidates:
-                        return candidates
+                        candidates.append((rq, snap))
+                    return candidates
             except Exception as e:
-                logger.warning(f"09:23 实时接口获取异常，自动回退高保真回放: {e}")
+                logger.error(f"09:23 实时接口获取异常: {e}", exc_info=True)
+            return []
         return MockReplayProvider.get_0923_dataset()
 
     def _get_0925_candidates(self) -> List[Tuple[StockQuote, AuctionSnapshot]]:
         """获取 09:25 开盘集合竞价候选标的（打板与首板/1进2）"""
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
-                if quotes:
-                    candidates = []
-                    for q in quotes:
-                        if not (1.5 <= q.change_pct <= 9.9):
-                            continue
-                        open_p = q.open_price if q.open_price > 0 else q.current_price
-                        vol_ratio = (q.volume / max(q.volume * 6.0, 1.0)) if q.volume > 0 else 0.08
-                        unmatched = max(q.amount * 0.2, 5000000.0)
-                        
-                        snap = AuctionSnapshot(
-                            code=q.code,
-                            auction_price=open_p,
-                            gap_percent=q.change_pct,
-                            auction_volume=q.volume,
-                            auction_amount=q.amount,
-                            auction_vol_ratio=vol_ratio,
-                            unmatched_buy_amount=unmatched,
-                            unmatched_to_auction_ratio=0.6,
-                            is_one_to_two=(q.change_pct >= 2.0),
-                            last_minute_rush=True
-                        )
-                        candidates.append((q, snap))
-                    if candidates:
-                        return candidates
+                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
+                if not active_quotes:
+                    return []
+                gap_quotes = [q for q in active_quotes if 1.5 <= q.change_pct <= 9.9]
+                if not gap_quotes:
+                    return []
+                codes = [q.code for q in gap_quotes[:40]]
+                real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
+                yesterday_zt = {item["code"]: item for item in self.data_provider.fetch_yesterday_limit_up_pool()}
+
+                candidates = []
+                for q in gap_quotes:
+                    rq = real_quotes.get(q.code, q)
+                    open_p = rq.open_price if rq.open_price > 0 else rq.current_price
+                    gap_pct = ((open_p - rq.pre_close) / rq.pre_close * 100.0) if rq.pre_close > 0 else rq.change_pct
+                    if q.code in yesterday_zt:
+                        rq.yesterday_status = "昨日首板"
+
+                    unmatched_vol = rq.buy1_volume
+                    unmatched_amt = rq.buy1_price * unmatched_vol
+                    strength = (rq.buy1_volume / rq.sell1_volume) if rq.sell1_volume > 0 else (5.0 if rq.buy1_volume > 0 else 1.0)
+                    prev_day_vol = (rq.amount / rq.current_price * 5.0) if rq.current_price > 0 else max(rq.volume * 5.0, 1.0)
+                    vol_ratio = (rq.volume / prev_day_vol) if prev_day_vol > 0 else 0.08
+
+                    snap = AuctionSnapshot(
+                        code=rq.code,
+                        auction_price=open_p,
+                        gap_percent=gap_pct,
+                        auction_volume=rq.volume,
+                        auction_amount=rq.amount,
+                        prev_day_volume=prev_day_vol,
+                        auction_vol_ratio=vol_ratio,
+                        unmatched_buy_volume=unmatched_vol,
+                        unmatched_amount=unmatched_amt,
+                        bid_ask_strength=strength,
+                        is_924_rush=(strength >= 2.0 or gap_pct >= 3.0)
+                    )
+                    candidates.append((rq, snap))
+                return candidates
             except Exception as e:
-                logger.warning(f"09:25 实时接口获取异常，自动回退高保真回放: {e}")
+                logger.error(f"09:25 实时接口获取异常: {e}", exc_info=True)
+            return []
         return MockReplayProvider.get_morning_auction_dataset()
 
     def _get_live_or_fallback_sentiment(self, quotes: Optional[List[StockQuote]] = None) -> Dict[str, Any]:
@@ -146,7 +164,17 @@ class ServerDaemonScheduler:
                 )
                 return sentiment
             except Exception as e:
-                logger.warning(f"拉取实时市场情绪异常，回退默认情绪: {e}")
+                logger.warning(f"拉取实时市场情绪异常: {e}")
+                return {
+                    "status": "数据同步中",
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "exploded_ratio": 0.0,
+                    "highest_continuous_board": 0,
+                    "top_theme": "数据同步中",
+                    "risk_advice": "聚焦有板块梯队配合的核心前排标的。",
+                    "sentiment_multiplier": 1.0
+                }
 
         return {
             "status": "活跃/做多周期",
@@ -159,7 +187,7 @@ class ServerDaemonScheduler:
             "sentiment_multiplier": 1.0
         }
 
-    def _get_1450_candidates(self):
+    def _get_1450_candidates(self) -> List[Tuple[StockQuote, ClosingSnapshot]]:
         if self.source == "live":
             try:
                 quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
@@ -184,13 +212,13 @@ class ServerDaemonScheduler:
                             is_rebound_limit=(q.change_pct >= 9.8 and q.low_price < q.current_price * 0.95)
                         )
                         candidates.append((q, snap))
-                    if candidates:
-                        return candidates
+                    return candidates
             except Exception as e:
-                print(f"[数据源提示] 14:50 实时接口获取异常，自动回退高保真回放: {e}")
+                logger.error(f"14:50 实时接口获取异常: {e}", exc_info=True)
+            return []
         return MockReplayProvider.get_closing_stage_dataset()
 
-    def _get_1458_candidates(self):
+    def _get_1458_candidates(self) -> List[Tuple[StockQuote, Snapshot1458]]:
         if self.source == "live":
             try:
                 quotes = self.data_provider.fetch_main_board_top_active(page_size=150)
@@ -224,10 +252,10 @@ class ServerDaemonScheduler:
                             last_seal_time=lbt
                         )
                         candidates.append((q, snap))
-                    if candidates:
-                        return candidates
+                    return candidates
             except Exception as e:
-                print(f"[数据源提示] 14:58 实时接口获取异常，自动回退高保真回放: {e}")
+                logger.error(f"14:58 实时接口获取异常: {e}", exc_info=True)
+            return []
         return MockReplayProvider.get_1458_dataset()
 
     def execute_and_push(self, task_type: str):
@@ -297,38 +325,48 @@ class ServerDaemonScheduler:
 
     def test_intraday_push(self):
         """测试盘中涨停上板与炸板异动微信推送"""
-        logger.info("[测试模式] 正在构建盘中涨停与炸板模拟异动并推送到微信...")
+        logger.info("[测试模式] 正在拉取今日真实涨停/炸板数据生成微信测试卡片...")
+        try:
+            zt = self.data_provider.fetch_today_zt_pool_details()
+            if zt:
+                code, detail = next(iter(zt.items()))
+                ev1 = IntradayEvent(
+                    event_type="LIMIT_UP",
+                    code=code,
+                    name=detail["name"],
+                    current_price=detail["price"],
+                    change_pct=detail["change_pct"],
+                    event_time=detail.get("first_seal_time", get_beijing_now().strftime("%H:%M:%S")),
+                    seal_amount_wan=detail["seal_amount"] / 10000.0,
+                    turnover_rate=detail["turnover_rate"],
+                    open_board_count=detail["open_board_count"],
+                    continuous_boards=detail["continuous_boards"],
+                    action_advice="【建议：重点关注主线连板接力】",
+                    reason=f"主力真实封板，买一封单 {detail['seal_amount']/10000.0:.0f} 万元，所属行业: {detail.get('industry', '主板题材')}。",
+                    industry=detail.get("industry", "主板题材")
+                )
+                self.pusher.push_intraday_events([ev1])
+                return
+        except Exception as e:
+            logger.warning(f"获取真实涨停测试数据失败: {e}")
+
+        # 降级备用测试卡片（明确标注通道测试字样）
         ev1 = IntradayEvent(
             event_type="LIMIT_UP",
-            code="600519",
-            name="贵州茅台",
-            current_price=1780.00,
-            change_pct=10.00,
-            event_time=datetime.now().strftime("%H:%M:%S"),
-            seal_amount_wan=65000.0,
-            turnover_rate=2.8,
-            open_board_count=0,
-            continuous_boards=2,
-            action_advice="【建议：重点打板/参与 2 进 3 接力】",
-            reason="1 进 2 换手晋级成功，确立身位优势。买一封单 65000 万元极其硬朗，承接有力，符合主线接力标准。",
-            industry="白酒"
-        )
-        ev2 = IntradayEvent(
-            event_type="BROKEN_BOARD",
             code="000001",
-            name="平安银行",
-            current_price=12.15,
-            change_pct=7.20,
-            event_time=datetime.now().strftime("%H:%M:%S"),
-            seal_amount_wan=0.0,
-            turnover_rate=8.5,
-            open_board_count=1,
+            name="微信推送通道测试",
+            current_price=10.00,
+            change_pct=10.00,
+            event_time=get_beijing_now().strftime("%H:%M:%S"),
+            seal_amount_wan=50000.0,
+            turnover_rate=3.0,
+            open_board_count=0,
             continuous_boards=1,
-            action_advice="【建议：回踩均线低吸·博秒回封】",
-            reason="炸板后价格仍坚守在 +7.2% 高位震荡，未出现踩踏恐慌，换手率 8.5% 良性，回踩分时均线不破可小仓位低吸博主力秒回封。",
-            industry="股份制银行"
+            action_advice="【此条仅为微信推送通道连通性测试】",
+            reason="系统网络连接正常，微信推送通道正常工作。",
+            industry="通道测试"
         )
-        self.pusher.push_intraday_events([ev1, ev2])
+        self.pusher.push_intraday_events([ev1])
 
     def run_daemon(self):
         """启动守护主循环"""
@@ -446,7 +484,7 @@ def main():
     parser.add_argument("--test-push", action="store_true", help="立即向微信发送一条测试选股卡片")
     parser.add_argument("--test-intraday", action="store_true", help="立即向微信发送模拟盘中封板与炸板异动测试卡片")
     parser.add_argument("--post-market", action="store_true", help="立即生成并向微信推送 15:10 盘后涨停复盘与次日打板预案报告")
-    parser.add_argument("--source", choices=["live", "mock"], default="mock", help="数据源 (live/mock)")
+    parser.add_argument("--source", choices=["live", "mock"], default="live", help="数据源 (live/mock)")
     args = parser.parse_args()
 
     scheduler = ServerDaemonScheduler(source=args.source)

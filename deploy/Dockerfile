@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt || true
 COPY . .
 
 # 启动后台守护调度进程
-CMD ["python", "daemon_scheduler.py", "--source", "mock"]
+CMD ["python", "daemon_scheduler.py", "--source", "live"]

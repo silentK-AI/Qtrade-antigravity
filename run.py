@@ -29,7 +29,7 @@ from strategies.closing_1458 import Closing1458Screener
 from strategies.market_sentiment import MarketSentimentAnalyzer
 
 
-def run_0923_mode(source: str = "mock", codes_filter: list = None):
+def run_0923_mode(source: str = "live", codes_filter: list = None):
     """【09:23:00 核心窗口】早盘不可撤单竞价抢筹锁定（09:23-09:24 操作）"""
     TerminalVisualizer.print_banner("A股主板【09:23 不可撤单竞价抢筹锁定】(全天封死 + 次日涨停)")
     print("  提示：当前处于 9:20-9:25 不可撤单阶段，已剔除 9:15-9:20 虚假撤单，真金白银大单锁板！")
@@ -72,7 +72,7 @@ def run_0923_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "09:23 不可撤单实时封板池 (锁定全天封死+次日连板)")
 
 
-def run_1458_mode(source: str = "mock", codes_filter: list = None):
+def run_1458_mode(source: str = "live", codes_filter: list = None):
     """【14:58:00 核心窗口】尾盘集合竞价锁定（14:58-14:59 操作，锁定次日涨停）"""
     TerminalVisualizer.print_banner("A股主板【14:58 尾盘集合竞价锁定】(锁定次日大概率涨停)")
     print("  提示：当前处于 14:57-15:00 收盘不可撤单集合竞价，全天筹码沉淀完毕！")
@@ -115,7 +115,7 @@ def run_1458_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "14:58 尾盘竞价实时锁定池 (次日大概率涨停)")
 
 
-def run_morning_mode(source: str = "mock", codes_filter: list = None):
+def run_morning_mode(source: str = "live", codes_filter: list = None):
     """运行早盘竞价选股模式 (09:25:00 锁定)"""
     TerminalVisualizer.print_banner("A股主板【早盘集合竞价打板】选股模式启动 (09:25:00)")
     
@@ -143,45 +143,21 @@ def run_morning_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "早盘竞价打板·09:25精选")
     else:
         print("  正在从开源实时行情接口抓取主板盘前竞价数据...")
-        data_provider = OpenDataProvider()
-        quotes = data_provider.fetch_main_board_top_active(page_size=120)
-        
-        if not quotes:
-            print("  [提示] 实时接口当前未返回有效盘口，自动切换为高保真仿真切片进行演示运行：\n")
-            run_morning_mode(source="mock")
-            return
-            
-        sentiment = sentiment_analyzer.evaluate_sentiment(quotes=quotes)
+        from daemon_scheduler import ServerDaemonScheduler
+        scheduler = ServerDaemonScheduler(source="live")
+        auction_candidates = scheduler._get_0925_candidates()
+        quotes = [q for q, _ in auction_candidates] if auction_candidates else None
+        sentiment = scheduler._get_live_or_fallback_sentiment(quotes)
         TerminalVisualizer.print_sentiment_summary(sentiment)
-        
-        auction_candidates = []
-        for q in quotes:
-            from models.stock_item import AuctionSnapshot
-            vol_ratio = (q.volume / (q.volume * 8.0)) if q.volume > 0 else 0.05
-            unmatched = q.amount * 0.15
-            snapshot = AuctionSnapshot(
-                code=q.code,
-                auction_price=q.open_price if q.open_price > 0 else q.current_price,
-                gap_percent=((q.open_price - q.pre_close) / q.pre_close * 100) if q.pre_close else q.change_pct,
-                auction_volume=q.volume * 0.1,
-                auction_amount=q.amount * 0.1,
-                prev_day_volume=q.volume,
-                auction_vol_ratio=vol_ratio,
-                unmatched_buy_volume=q.volume * 0.05,
-                unmatched_amount=unmatched,
-                bid_ask_strength=1.8,
-                is_924_rush=(q.change_pct > 2.0)
-            )
-            auction_candidates.append((q, snapshot))
 
         signals = screener.run_strategy(
             candidates=auction_candidates,
-            sentiment_multiplier=sentiment["sentiment_multiplier"]
+            sentiment_multiplier=float(sentiment["sentiment_multiplier"])
         )
         TerminalVisualizer.print_signals_table(signals, "早盘竞价打板·实时精选")
 
 
-def run_closing_mode(source: str = "mock", codes_filter: list = None):
+def run_closing_mode(source: str = "live", codes_filter: list = None):
     """运行尾盘抢筹选股模式 (14:50:00 锁定)"""
     TerminalVisualizer.print_banner("A股主板【尾盘抢筹/蓄势冲板】选股模式启动 (14:50:00)")
     
@@ -209,41 +185,16 @@ def run_closing_mode(source: str = "mock", codes_filter: list = None):
         TerminalVisualizer.print_signals_table(signals, "尾盘选股·14:50精选")
     else:
         print("  正在从开源实时行情接口抓取主板尾盘分时异动数据...")
-        data_provider = OpenDataProvider()
-        quotes = data_provider.fetch_main_board_top_active(page_size=120)
-        
-        if not quotes:
-            print("  [提示] 实时接口当前未返回有效盘口，自动切换为高保真仿真切片进行演示运行：\n")
-            run_closing_mode(source="mock")
-            return
-            
-        sentiment = sentiment_analyzer.evaluate_sentiment(quotes=quotes)
+        from daemon_scheduler import ServerDaemonScheduler
+        scheduler = ServerDaemonScheduler(source="live")
+        closing_candidates = scheduler._get_1450_candidates()
+        quotes = [q for q, _ in closing_candidates] if closing_candidates else None
+        sentiment = scheduler._get_live_or_fallback_sentiment(quotes)
         TerminalVisualizer.print_sentiment_summary(sentiment)
-        
-        closing_candidates = []
-        for q in quotes:
-            from models.stock_item import ClosingSnapshot
-            ratio = (q.current_price / q.high_price) if q.high_price > 0 else 0.98
-            tail_vol = q.volume * 0.22
-            snapshot = ClosingSnapshot(
-                code=q.code,
-                current_price=q.current_price,
-                day_high=q.high_price,
-                close_to_high_ratio=ratio,
-                current_change_pct=q.change_pct,
-                vwap=q.vwap,
-                is_above_vwap=(q.current_price >= q.vwap),
-                tail_volume=tail_vol,
-                total_volume=q.volume,
-                tail_vol_ratio=0.22,
-                tail_net_large_inflow=2500.0 if q.change_pct > 3.0 else -500.0,
-                is_rebound_limit=q.is_limit_up
-            )
-            closing_candidates.append((q, snapshot))
 
         signals = screener.run_strategy(
             candidates=closing_candidates,
-            sentiment_multiplier=sentiment["sentiment_multiplier"]
+            sentiment_multiplier=float(sentiment["sentiment_multiplier"])
         )
         TerminalVisualizer.print_signals_table(signals, "尾盘选股·实时精选")
 
@@ -259,7 +210,7 @@ def main():
     parser.add_argument(
         "--source",
         choices=["mock", "live"],
-        default="mock",
+        default="live",
         help="数据源类型: mock(离线高保真仿真切片), live(开源实时接口)"
     )
     parser.add_argument(

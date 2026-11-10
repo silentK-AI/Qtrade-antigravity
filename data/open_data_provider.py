@@ -11,6 +11,7 @@ import urllib.parse
 from typing import List, Dict, Optional, Any
 from models.stock_item import StockQuote
 from utils.filters import StockFilter
+from utils.calendar import get_beijing_now
 from utils.logger import get_logger
 
 logger = get_logger("open_data_provider")
@@ -109,6 +110,12 @@ class OpenDataProvider:
                 float_market_cap = float(parts[44]) if len(parts) > 44 and parts[44] else 0.0
                 total_market_cap = float(parts[45]) if len(parts) > 45 and parts[45] else 0.0
                 
+                # 真实买一/卖一五档盘口深度 (手转股)
+                buy1_price = float(parts[9]) if len(parts) > 9 and parts[9] else 0.0
+                buy1_volume = float(parts[10]) * 100 if len(parts) > 10 and parts[10] else 0.0
+                sell1_price = float(parts[19]) if len(parts) > 19 and parts[19] else 0.0
+                sell1_volume = float(parts[20]) * 100 if len(parts) > 20 and parts[20] else 0.0
+
                 market = "SH" if code.startswith("6") else "SZ"
                 vwap = (amount / volume) if volume > 0 else curr_price
 
@@ -132,7 +139,11 @@ class OpenDataProvider:
                     float_market_cap=float_market_cap,
                     total_market_cap=total_market_cap,
                     vwap=vwap,
-                    is_limit_up=is_limit_up
+                    is_limit_up=is_limit_up,
+                    buy1_price=buy1_price,
+                    buy1_volume=buy1_volume,
+                    sell1_price=sell1_price,
+                    sell1_volume=sell1_volume
                 )
                 results.append(quote)
             except (ValueError, IndexError):
@@ -286,8 +297,7 @@ class OpenDataProvider:
         """
         调用东财官方今日实时涨停池接口，获取每只股票的首次封板时间、最后封板时间、炸板次数、封单金额与连板数
         """
-        from datetime import datetime
-        today = datetime.now().strftime("%Y%m%d")
+        today = get_beijing_now().strftime("%Y%m%d")
         url = (
             f"https://push2ex.eastmoney.com/getTopicZTPool?"
             f"ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date={today}"
@@ -334,8 +344,7 @@ class OpenDataProvider:
         """
         调用东财官方今日实时炸板池接口，获取所有盘中涨停后炸板的标的
         """
-        from datetime import datetime
-        today = datetime.now().strftime("%Y%m%d")
+        today = get_beijing_now().strftime("%Y%m%d")
         url = (
             f"https://push2ex.eastmoney.com/getTopicZBPool?"
             f"ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date={today}"

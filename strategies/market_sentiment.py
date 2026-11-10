@@ -53,7 +53,11 @@ class MarketSentimentAnalyzer:
                 limit_down_count = sum(1 for q in quotes if q.change_pct <= -9.8 and stock_filter.is_main_board_code(q.code))
 
             # 情绪周期定位
-            if (exploded_ratio > self.config.PANIC_EXPLODED_RATIO * 100 and total_attempts >= 10) or limit_down_count >= self.config.MAX_DOWN_LIMIT_COUNT:
+            if limit_up_count == 0 and exploded_count == 0:
+                status = "早盘集合竞价 / 待开盘"
+                risk_advice = "早盘竞价初期，全市场尚未产生大面积封单，等待开盘后分时量价确认。"
+                sentiment_multiplier = 1.00
+            elif (exploded_ratio > self.config.PANIC_EXPLODED_RATIO * 100 and total_attempts >= 10) or limit_down_count >= self.config.MAX_DOWN_LIMIT_COUNT:
                 status = "情绪退潮期 / 大分歧"
                 risk_advice = "谨慎做多！炸板率高企或跌停偏多，应严格控制仓位在3成以下，仅关注绝对核心龙头。"
                 sentiment_multiplier = 0.80
@@ -78,12 +82,12 @@ class MarketSentimentAnalyzer:
             }
         except Exception:
             return {
-                "status": "活跃/做多周期",
-                "limit_up_count": 30,
+                "status": "数据同步中",
+                "limit_up_count": 0,
                 "limit_down_count": 0,
-                "exploded_ratio": 15.0,
-                "highest_continuous_board": 3,
-                "top_theme": "主板核心热点",
+                "exploded_ratio": 0.0,
+                "highest_continuous_board": 0,
+                "top_theme": "数据同步中",
                 "risk_advice": "聚焦有板块梯队配合的核心前排标的。",
                 "sentiment_multiplier": 1.00
             }

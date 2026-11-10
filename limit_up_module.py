@@ -35,10 +35,10 @@ from data.mock_replay import MockReplayProvider
 class LimitUpModule:
     """A股打板量化策略模块 (外部接入入口)"""
 
-    def __init__(self, pushplus_token: Optional[str] = None, source: str = "mock"):
+    def __init__(self, pushplus_token: Optional[str] = None, source: str = "live"):
         """
         :param pushplus_token: 可选。若不传，则自动读取服务器环境环境变量 PUSHPLUS_TOKEN 或 PUSH_PLUS_TOKEN
-        :param source: 'live' 为线上实时盘口，'mock' 为切片回放
+        :param source: 'live' 为线上真实盘口，'mock' 为离线仿真切片
         """
         self.source = source
         self.config = WeChatNotifyConfig()

@@ -57,9 +57,9 @@ class WeChatPusher:
             lines.append(f"- **综合评分**: **{s.score:.1f}分** | **资金得分: {s.capital_score:.1f}分**")
             
             # 关键资金面与可买入性
-            cap_evidences = [v for k, v in s.key_factors.items() if "资金" in k or "可买入" in k]
-            if cap_evidences:
-                lines.append(f"- **资金面与可买入**: {cap_evidences[0]}")
+            for k, v in s.key_factors.items():
+                clean_k = k.strip("【】")
+                lines.append(f"- **{clean_k}**: {v}")
             
             lines.append(f"- **操作指引**: <font color=\"#e67e22\">**{s.suggested_action}**</font>")
             lines.append(f"- **防守止损**: {s.stop_loss_price:.2f}元")
