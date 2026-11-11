@@ -157,9 +157,10 @@ class OpenDataProvider:
         """
         # 东财官方纯沪深主板榜单 (m:0+t:6 为深市主板; m:1+t:2 为沪市主板，精准排除创业板与科创板)
         # 增加 f62 字段获取真实实时主力资金净买入额 (元)
+        pz = min(500, max(page_size, 200))
         url = (
             "https://push2.eastmoney.com/api/qt/clist/get?"
-            "pn=1&pz=200&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+            f"pn=1&pz={pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
             "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:1+t:2"
             "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62"
         )
@@ -232,6 +233,40 @@ class OpenDataProvider:
             except Exception:
                 pass
             return code, 0.0
+
+        if not codes:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(10, len(codes))) as executor:
+            return dict(executor.map(_fetch_single, codes))
+
+    def fetch_recent_stock_stats(self, codes: List[str]) -> Dict[str, Dict[str, float]]:
+        """
+        并发抓取股票最近几个交易日的真实日K数据，计算：
+        - turnover_3d: 近3个交易日（含今日）累计真实换手率 (%)
+        - gain_5d: 近5个交易日累计涨跌幅 (%)
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_single(code: str) -> Tuple[str, Dict[str, float]]:
+            market = 0 if code.startswith(("0", "3")) else 1
+            url = (
+                f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+                f"secid={market}.{code}&fields1=f1&fields2=f51,f53,f57,f59,f61&klt=101&fqt=0&end=20500101&lmt=6"
+            )
+            try:
+                content = self._get_url_content(url)
+                data = json.loads(content)
+                klines = data.get("data", {}).get("klines", [])
+                if klines:
+                    recent_3 = klines[-3:]
+                    turnover_3d = round(sum(float(item.split(",")[4]) for item in recent_3), 2)
+                    base_close = float(klines[0].split(",")[1])
+                    last_close = float(klines[-1].split(",")[1])
+                    gain_5d = round(((last_close - base_close) / base_close * 100.0) if base_close > 0 else 0.0, 2)
+                    return code, {"turnover_3d": turnover_3d, "gain_5d": gain_5d}
+            except Exception:
+                pass
+            return code, {"turnover_3d": 0.0, "gain_5d": 0.0}
 
         if not codes:
             return {}

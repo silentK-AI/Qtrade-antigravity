@@ -247,23 +247,54 @@ class ServerDaemonScheduler:
     def _get_1458_candidates(self) -> List[Tuple[StockQuote, Snapshot1458]]:
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=150)
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=500) or []
                 zt_details = self.data_provider.fetch_today_zt_pool_details()
+
+                # 确保今日涨停池中全部合规主板标的都不被榜单截断遗漏 (修复 clist 截断盲区)
+                if zt_details:
+                    existing_codes = {q.code for q in quotes}
+                    missing_zt_codes = [
+                        code for code, d in zt_details.items()
+                        if code not in existing_codes
+                        and self.data_provider.filter.is_main_board_code(code)
+                        and self.data_provider.filter.is_valid_name(d.get("name", ""))
+                    ]
+                    if missing_zt_codes:
+                        extra_quotes = self.data_provider.fetch_realtime_quotes(missing_zt_codes)
+                        for eq in extra_quotes:
+                            if self.data_provider.filter.filter_quote(eq):
+                                quotes.append(eq)
+
                 if quotes:
-                    candidates = []
-                    for q in quotes:
-                        if not (5.5 <= q.change_pct <= 10.5):
-                            continue
+                    filtered_quotes = [q for q in quotes if 5.5 <= q.change_pct <= 10.5]
+                    # 仅对午后/回封/炸板/蓄势候选并发拉取近3日真实累计换手与近5日涨幅
+                    tail_codes = []
+                    for q in filtered_quotes:
                         detail = zt_details.get(q.code, {})
+                        fbt = detail.get("first_seal_time", "")
+                        lbt = detail.get("last_seal_time", fbt)
+                        zbc = int(detail.get("open_board_count", 0) or 0)
+                        if (q.code not in zt_details) or lbt >= "13:30" or fbt >= "13:30" or zbc >= 1:
+                            tail_codes.append(q.code)
+                    recent_stats = self.data_provider.fetch_recent_stock_stats(tail_codes)
+
+                    candidates = []
+                    for q in filtered_quotes:
+                        detail = zt_details.get(q.code, {})
+                        if detail and detail.get("industry") and (not q.sector or q.sector in ("未分类", "未知板块")):
+                            q.sector = detail["industry"]
+
                         fbt = detail.get("first_seal_time", "")
                         lbt = detail.get("last_seal_time", fbt)
                         zbc = int(detail.get("open_board_count", 0) or 0)
                         fund = float(detail.get("seal_amount", 0.0) or 0.0)
                         lbc = int(detail.get("continuous_boards", 1 if q.change_pct >= 9.8 else 0) or 0)
 
-                        is_lu = (q.change_pct >= 9.8 and (detail or (q.buy1_volume > 0 and q.sell1_volume == 0)))
+                        is_lu = (q.change_pct >= 9.8 and (bool(detail) or (q.buy1_volume > 0 and q.sell1_volume == 0)))
                         float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 0.0
                         seal_ratio = (fund / float_cap * 1000.0) if float_cap > 0 else 0.0
+                        seal_to_amount = (fund / q.amount * 100.0) if (q.amount > 0 and fund > 0) else 0.0
+                        stats = recent_stats.get(q.code, {})
 
                         snap = Snapshot1458(
                             code=q.code,
@@ -275,7 +306,10 @@ class ServerDaemonScheduler:
                             day_open_board_count=zbc,
                             first_seal_time=fbt,
                             continuous_board_count=lbc,
-                            last_seal_time=lbt
+                            last_seal_time=lbt,
+                            turnover_3d=float(stats.get("turnover_3d", 0.0)),
+                            seal_to_amount_ratio=round(seal_to_amount, 2),
+                            gain_5d=float(stats.get("gain_5d", 0.0))
                         )
                         candidates.append((q, snap))
                     return candidates

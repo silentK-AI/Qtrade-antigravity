@@ -98,6 +98,9 @@ class Snapshot1458:
     first_seal_time: str           # 首次封板时间（如 "09:36:00"）
     continuous_board_count: int = 1# 当前连板高度（如 1板、2板）
     last_seal_time: str = ""       # 最后封板时间（如 "14:55:23"）
+    turnover_3d: float = 0.0       # 近3日累计换手率 (%) —— 鉴别低位启动与高位出货
+    seal_to_amount_ratio: float = 0.0 # 封成比：封单金额 / 全天成交额 (%)
+    gain_5d: float = 0.0           # 近5日累计涨幅 (%)
 
 
 @dataclass

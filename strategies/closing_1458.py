@@ -59,6 +59,10 @@ class Closing1458Screener(BaseScreener):
         first_time = snap.first_seal_time
         last_time = getattr(snap, "last_seal_time", "") or first_time
         zbc = snap.day_open_board_count
+        to_3d = float(getattr(snap, "turnover_3d", 0.0) or 0.0)
+        seal_to_amt = float(getattr(snap, "seal_to_amount_ratio", 0.0) or 0.0)
+        if seal_to_amt == 0.0 and quote.amount > 0 and snap.closing_seal_amount > 0:
+            seal_to_amt = round(snap.closing_seal_amount / quote.amount * 100.0, 2)
 
         # -----------------------------------------------------------------
         # 场景一：早盘极早封死 (首次封板 <= 10:30，且无炸板或早早回封 <= 11:30) —— 绝对买不进去！
@@ -74,135 +78,160 @@ class Closing1458Screener(BaseScreener):
             raw_cap = 54.0 + min(6.0, seal_wan / 15000.0 * 6.0)
 
         # -----------------------------------------------------------------
-        # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板时间 >= 14:00，或首次封板时间 >= 14:00，或盘中炸板多次尾盘 >= 13:30 压哨回封)
+        # 场景二：真正的尾盘回封 / 午后弱转强回封 (最后封板 >= 13:45 或首次封板 >= 14:00，或盘中分歧后 >= 13:30 回封)
         # -----------------------------------------------------------------
-        elif snap.is_limit_up and (_time_ge(last_time, "14:00") or _time_ge(first_time, "14:00") or (zbc >= 1 and _time_ge(last_time, "13:30"))):
-            # 1. 资金因子评分 (满分 60 分)
-            # 封单绝对规模 (满分 25 分)
+        elif snap.is_limit_up and (_time_ge(last_time, "13:45") or _time_ge(first_time, "14:00") or (zbc >= 1 and _time_ge(last_time, "13:30"))):
+            # 1. 资金封成强度与承接评分 (满分 60 分)
+            # 封成比 (封单额 / 当日累计成交额，满分 25 分) —— 实盘验证核心第一因子：剔除巨量虚封、优选惜售锁筹
+            if seal_to_amt >= 20.0:
+                score_seal_amt = 25.0
+                factors["【资金封成比】"] = f"封成比 {seal_to_amt:.1f}% (极度惜售·封单超日内成交五分之一)"
+            elif seal_to_amt >= 12.0:
+                score_seal_amt = 21.0
+                factors["【资金封成比】"] = f"封成比 {seal_to_amt:.1f}% (主力控盘坚决·锁筹意愿极强)"
+            elif seal_to_amt >= 6.0:
+                score_seal_amt = 15.0
+                factors["【资金封成比】"] = f"封成比 {seal_to_amt:.1f}% (封成比例合格)"
+            elif seal_to_amt >= 3.0:
+                score_seal_amt = 6.0
+                factors["【资金封成比】"] = f"⚠️ 封成比仅 {seal_to_amt:.1f}% (成交体量偏大，封单相对薄弱)"
+            else:
+                score_seal_amt = 0.0
+                factors["【资金封成比】"] = f"🚨 封成比仅 {seal_to_amt:.1f}% (严重虚弱，封单远小于日内抛压)"
+
+            # 绝对封单规模 (满分 15 分)
             if seal_wan >= 8000.0:
-                score_seal = 25.0
+                score_seal = 15.0
                 factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (超级主力顶格大单锁仓)"
-            elif seal_wan >= 5000.0:
-                score_seal = 21.0
-                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (主力巨资坚决封死)"
-            elif seal_wan >= 3000.0:
-                score_seal = 17.0
-                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (主力真金白银锁筹)"
-            elif seal_wan >= 1500.0:
+            elif seal_wan >= 3500.0:
                 score_seal = 12.0
-                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (排单良好)"
-            elif seal_wan >= 800.0:
-                score_seal = 7.0
-                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (封单偏薄)"
-            elif seal_wan >= 400.0:
-                score_seal = 3.0
-                factors["【资金承接】"] = f"不可撤单封单仅 {seal_wan:.0f} 万元 (抵御抛盘能力较弱)"
+                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (主力大单坚决封死)"
+            elif seal_wan >= 2000.0:
+                score_seal = 9.0
+                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (排单承接良好)"
+            elif seal_wan >= 1000.0:
+                score_seal = 5.0
+                factors["【资金承接】"] = f"不可撤单封单 {seal_wan:.0f} 万元 (封单体量中等)"
             else:
-                score_seal = 0.0
-                factors["【资金承接】"] = f"封单仅 {seal_wan:.0f} 万元 (严重单薄)"
+                score_seal = 1.0
+                factors["【资金承接】"] = f"封单仅 {seal_wan:.0f} 万元 (体量单薄)"
 
-            # 封单占自由流通市值千分比 (满分 15 分)
+            # 封单占自由流通市值千分比 (满分 10 分)
             if seal_ratio >= 6.0:
-                score_ratio = 15.0
-                factors["【封成比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (顶格比例)"
+                score_ratio = 10.0
+                factors["【封流比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (顶格比例)"
             elif seal_ratio >= 3.0:
-                score_ratio = 11.0
-                factors["【封成比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (比例充足)"
+                score_ratio = 8.0
+                factors["【封流比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (比例充足)"
             elif seal_ratio >= 1.5:
-                score_ratio = 7.0
-                factors["【封成比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (中规中矩)"
-            elif seal_ratio >= 0.5:
-                score_ratio = 4.0
-                factors["【封成比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (偏低)"
+                score_ratio = 5.0
+                factors["【封流比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰ (中规中矩)"
             else:
-                score_ratio = 1.0
-                factors["【封成比例】"] = f"封单占流通盘仅 {seal_ratio:.2f}‰"
+                score_ratio = 2.0
+                factors["【封流比例】"] = f"封单占流通盘 {seal_ratio:.2f}‰"
 
-            # 回封时效与硬度 (满分 20 分)
-            if _time_ge(last_time, "14:40") and zbc <= 2:
-                score_time = 20.0
-                factors["【回封时机】"] = f"最后回封时间 {last_time} (压哨突袭回封，分歧转一致黄金时点)"
-            elif _time_ge(last_time, "14:20"):
-                score_time = 16.0
-                factors["【回封时机】"] = f"最后回封时间 {last_time} (尾盘稳步封死)"
-            elif _time_ge(last_time, "14:00"):
-                score_time = 12.0
-                factors["【回封时机】"] = f"最后回封时间 {last_time} (午后回封)"
-            elif _time_ge(last_time, "13:30"):
+            # 回封时效与尾盘突袭共振 (满分 10 分)
+            if _time_ge(last_time, "14:15") and zbc <= 2:
+                score_time = 10.0
+                factors["【回封时机】"] = f"最后回封时间 {last_time} (尾盘突袭稳步封死，分歧转一致黄金时点)"
+            elif _time_ge(last_time, "13:45"):
                 score_time = 8.0
-                factors["【回封时机】"] = f"最后回封时间 {last_time} (盘中回封偏早)"
+                factors["【回封时机】"] = f"最后回封时间 {last_time} (午后承接走强封死)"
+            elif _time_ge(last_time, "13:30"):
+                score_time = 6.0
+                factors["【回封时机】"] = f"最后回封时间 {last_time} (午后回封)"
             else:
-                score_time = 5.0
+                score_time = 4.0
                 factors["【回封时机】"] = f"回封时间 {last_time}"
 
-            raw_cap = score_seal + score_ratio + score_time
+            raw_cap = score_seal_amt + score_seal + score_ratio + score_time
 
-            # 2. 筹码与炸板风控评分 (满分 25 分)
+            # 2. 筹码锁定与派发排雷评分 (满分 40 分)
+            # 近3日累计换手 / 当日换手健康度 (满分 25 分) —— 严防高位巨量派发次日大面
+            to = quote.turnover_rate
+            if to_3d > 0.0:
+                if to_3d <= 22.0 and to <= 12.0:
+                    score_to = 25.0
+                    factors["【换手硬度】"] = f"近3日累计换手仅 {to_3d:.1f}% (今日 {to:.1f}%)，筹码高度锁定未派发"
+                elif to_3d <= 28.0:
+                    score_to = 21.0
+                    factors["【换手硬度】"] = f"近3日累计换手 {to_3d:.1f}% (今日 {to:.1f}%)，良性接力换手"
+                elif to_3d <= 38.0:
+                    score_to = 14.0
+                    factors["【换手硬度】"] = f"近3日累计换手 {to_3d:.1f}% (今日 {to:.1f}%)，换手偏大存在分歧"
+                elif to_3d <= 48.0:
+                    score_to = 4.0
+                    factors["【换手硬度】"] = f"⚠️ 近3日累计换手达 {to_3d:.1f}% (高位宽幅换手，谨慎防派发)"
+                else:
+                    score_to = -25.0
+                    factors["【换手硬度】"] = f"🚨 近3日累计换手高达 {to_3d:.1f}% (连续巨量筹码派发，次日极易大面核按钮)"
+            else:
+                if 6.0 <= to <= 18.0:
+                    score_to = 25.0
+                    factors["【换手硬度】"] = f"全天充分换手 {to:.1f}%，筹码锁定与换手匹配良好"
+                elif 18.0 < to <= 25.0:
+                    score_to = 17.0
+                    factors["【换手硬度】"] = f"全天活跃换手 {to:.1f}%"
+                elif to < 6.0:
+                    score_to = 15.0
+                    factors["【换手硬度】"] = f"换手率 {to:.1f}% (筹码惜售锁定)"
+                elif 25.0 < to <= 32.0:
+                    score_to = 6.0
+                    factors["【换手硬度】"] = f"⚠️ 换手率高达 {to:.1f}% (高位巨幅换手，次日承接压力大)"
+                else:
+                    score_to = -15.0
+                    factors["【换手硬度】"] = f"🚨 换手率高达 {to:.1f}% (严重换手过载，警惕主力出货)"
+
+            # 炸板次数抗性 (满分 15 分)
             if zbc == 0:
                 score_zbc = 15.0
-                factors["【炸板抗性】"] = "全天零炸板一封到底，筹码结构极其坚固"
+                factors["【炸板抗性】"] = "全天零炸板一次封死到底，筹码结构最坚固"
             elif zbc == 1:
-                score_zbc = 15.0
-                factors["【炸板抗性】"] = "盘中仅分歧炸板1次，洗净浮筹后秒回封，筹码最稳"
+                score_zbc = 13.0
+                factors["【炸板抗性】"] = "盘中仅分歧炸板1次后顽强回封，筹码清洗相对充分"
             elif zbc == 2:
-                score_zbc = 10.0
-                factors["【炸板抗性】"] = f"盘中炸板 {zbc} 次，适度分歧检验，尾盘顽强回封"
-            elif zbc == 3:
                 score_zbc = 4.0
-                factors["【炸板抗性】"] = f"⚠️ 盘中炸板 {zbc} 次，分歧显著，浮筹略有松动"
-            elif zbc in [4, 5]:
+                factors["【炸板抗性】"] = f"⚠️ 盘中炸板 {zbc} 次，分歧偏大需严苛检视封成比"
+            elif zbc == 3:
                 score_zbc = -8.0
-                factors["【炸板抗性】"] = f"🚨 盘中炸板高达 {zbc} 次，筹码松散严重，属于烂板范畴"
+                factors["【炸板抗性】"] = f"🚨 盘中炸板达 {zbc} 次，筹码松动明显"
             else:
                 score_zbc = -30.0
-                factors["【风控警示】"] = f"❌ 盘中炸板高达 {zbc} 次，筹码彻底涣散，次日极易踩踏低开！"
+                factors["【风控警示】"] = f"❌ 盘中炸板高达 {zbc} 次，筹码彻底涣散，次日极易低开核按钮！"
 
-            # 换手率健康度 (满分 10 分)
-            to = quote.turnover_rate
-            if 6.0 <= to <= 18.0:
-                score_to = 10.0
-                factors["【换手硬度】"] = f"全天充分换手 {to:.1f}%，筹码锁定与换手完美匹配"
-            elif 18.0 < to <= 25.0:
-                score_to = 7.0
-                factors["【换手硬度】"] = f"全天活跃换手 {to:.1f}%"
-            elif to < 6.0:
-                score_to = 5.0
-                factors["【换手硬度】"] = f"换手率 {to:.1f}% (换手略欠充分)"
-            elif 25.0 < to <= 32.0:
-                score_to = 2.0
-                factors["【换手硬度】"] = f"⚠️ 换手率高达 {to:.1f}% (高位筹码巨幅换手，次日承接压力大)"
-            else:
-                score_to = -5.0
-                factors["【换手硬度】"] = f"🚨 换手率高达 {to:.1f}% (严重换手过载，警惕主力出货)"
+            raw_risk = score_to + score_zbc
+            raw_score = raw_cap + raw_risk
 
-            raw_risk = score_zbc + score_to
-
-            # 3. 连板梯队与题材配合 (满分 15 分)
-            lbc = snap.continuous_board_count
-            score_board = 8.0 if lbc == 2 else (6.0 if lbc == 3 else 5.0)
-            score_sector = 7.0 if quote.sector in ["汽车零部", "通用设备", "专用设备", "光伏设备", "半导体"] else 4.0
-            raw_tech = score_board + score_sector
-
-            raw_score = raw_cap + raw_risk + raw_tech
-
-            # 风控一票否决与评级划分
-            if zbc >= 5:
-                raw_score = min(raw_score, 50.0)
+            # 3. 硬性风控一票否决与实战分级
+            if zbc >= 4:
+                raw_score = min(raw_score, 45.0)
                 factors["【可买入性】"] = f"❌ 坚决回避！全天炸板高达 {zbc} 次，主力护盘乏力，次日大概率大幅低开"
                 pattern = "【高危烂板·坚决回避】"
                 action = f"【严禁排单！】全天炸板高达 {zbc} 次，属于典型日内烂板，次日极大概率直接低开被核"
                 expectation = "筹码已被反复砸散，属于严重烂板，次日极易遭遇获利盘与割肉盘抢跑践踏。"
-            elif seal_wan < 500.0:
+            elif to_3d > 48.0:
+                raw_score = min(raw_score, 50.0)
+                factors["【可买入性】"] = f"❌ 坚决回避！近3日累计换手高达 {to_3d:.1f}%，疑似高位筹码派发，次日大面风险极高"
+                pattern = "【高位派发·坚决回避】"
+                action = f"【严禁排单！】近3日换手率达 {to_3d:.1f}%，短线浮筹透支严重，次日极易低开兑现"
+                expectation = "连续高换手伴随抛压释放，次日大概率面临获利盘集中出逃冲击。"
+            elif seal_to_amt > 0.0 and seal_to_amt < 3.0:
+                raw_score = min(raw_score, 60.0)
+                factors["【可买入性】"] = f"⚠️ 坚决回避！封成比仅 {seal_to_amt:.1f}% (<3%)，封单相对日内成交额过于虚弱"
+                pattern = "【封成比过弱·坚决回避】"
+                action = f"【不建议排单】封成比仅 {seal_to_amt:.1f}%，缺乏主力真金白银锁仓，次日承接堪忧"
+                expectation = "尾盘虚封痕迹较重，日内巨量换手后若无强封成比支撑，次日极易低开低走。"
+            elif seal_wan < 800.0:
                 raw_score = min(raw_score, 65.0)
-                factors["【可买入性】"] = f"⚠️ 封单仅 {seal_wan:.0f} 万元，封单极薄，缺乏主力护盘"
+                factors["【可买入性】"] = f"⚠️ 封单仅 {seal_wan:.0f} 万元 (<800万)，封单单薄缺乏护盘"
                 pattern = "【封单单薄·谨慎排单】"
                 action = f"【不建议排单】尾盘封单仅 {seal_wan:.0f} 万元，极易被尾盘最后一刻抛盘砸开"
                 expectation = "封单不足，缺乏大资金锁仓支撑，次日溢价预期偏低。"
             else:
-                factors["【可买入性】"] = f"✅ 能够买进！最后回封时间为 {last_time} (盘中炸板 {zbc} 次)，抛盘充分换手，排单成交率高"
+                factors["【可买入性】"] = f"✅ 能够买进！最后回封时间为 {last_time} (盘中炸板 {zbc} 次，封成比 {seal_to_amt:.1f}%)，排单成交率高"
                 pattern = "【尾盘回封·能买进】分歧转一致次日连板"
                 action = "【14:58立即挂涨停价委托】排队进入收盘集合竞价，预计大概率能成交！"
-                expectation = "尾盘经受分歧后顽强回封，浮筹已在盘中洗尽，次日享受弱转强高开连板溢价。"
+                expectation = "低累计换手配合高封成比强势封板，主力锁仓坚决，次日享受高溢价与连板预期。"
 
         # -----------------------------------------------------------------
         # 场景三：其他时间段平稳封死的主板标的 (买入概率低)
@@ -219,12 +248,22 @@ class Closing1458Screener(BaseScreener):
         # 场景四：尾盘放量蓄势冲板未遂 (+5.5% ~ +9.2%，100%市价秒买进！)
         # -----------------------------------------------------------------
         elif not snap.is_limit_up and 5.5 <= snap.indicative_change_pct <= 9.2:
-            factors["【可买入性】"] = "✅ 100%秒买进！盘口卖单充足，直接市价挂单即时成交"
-            factors["【资金抢筹】"] = "主力尾盘巨资逆势扫盘，故意不封死避免过早暴露"
-            pattern = "【蓄势未板·100%买进】尾盘突击次日冲板"
-            action = "【14:58-14:59市价直接买入】在收盘前锁定底仓，次日早盘享受抬轿"
-            expectation = "全天主力沿均线蓄势推升，尾盘爆量隐蔽吸筹，次日早盘极高概率直接集合竞价高开抢筹冲涨停。"
-            raw_score, raw_cap = 80.0, 45.0
+            if to_3d > 48.0:
+                factors["【可买入性】"] = f"❌ 坚决回避！近3日累计换手高达 {to_3d:.1f}%，尾盘拉高疑似派发"
+                factors["【资金抢筹】"] = "近3日高换手透支买盘，不宜盲目市价追高"
+                pattern = "【高位派发·坚决回避】"
+                action = "【不建议买入】高位巨量换手下冲高未封，谨防次日低开"
+                expectation = "筹码连续高换手松动，次日冲高回落概率较高。"
+                raw_score, raw_cap = 55.0, 25.0
+            else:
+                inflow_bonus = min(4.0, max(0.0, quote.net_large_inflow / 50000000.0 * 4.0)) if quote.net_large_inflow > 0 else 0.0
+                to_info = f"，近3日累计换手 {to_3d:.1f}% 健康" if to_3d > 0 else ""
+                factors["【可买入性】"] = f"✅ 100%秒买进！盘口卖单充足，直接市价挂单即时成交{to_info}"
+                factors["【资金抢筹】"] = "主力尾盘巨资逆势扫盘，故意不封死避免过早暴露"
+                pattern = "【蓄势未板·100%买进】尾盘突击次日冲板"
+                action = "【14:58-14:59市价直接买入】在收盘前锁定底仓，次日早盘享受抬轿"
+                expectation = "全天主力沿均线蓄势推升，尾盘爆量隐蔽吸筹，次日早盘极高概率直接集合竞价高开抢筹冲涨停。"
+                raw_score, raw_cap = 80.0 + inflow_bonus, 45.0 + inflow_bonus
 
         # -----------------------------------------------------------------
         # 其余平庸标的淘汰
@@ -232,8 +271,8 @@ class Closing1458Screener(BaseScreener):
         else:
             return 0.0, 0.0, "平庸标的", {"【状态】": "不符合尾盘进攻特征"}, "观望", "无次日涨停预期"
 
-        final_score = round(min(100.0, raw_score * sentiment_multiplier), 1)
-        final_cap = round(min(60.0, raw_cap * sentiment_multiplier), 1)
+        final_score = round(max(0.0, min(100.0, raw_score * sentiment_multiplier)), 1)
+        final_cap = round(max(0.0, min(60.0, raw_cap * sentiment_multiplier)), 1)
         return final_score, final_cap, pattern, factors, action, expectation
 
     def run_strategy(
@@ -270,9 +309,9 @@ class Closing1458Screener(BaseScreener):
                 )
                 signals.append(signal)
 
-        # 排序与风控过滤：严格剔除高危烂板与严重单薄标的
-        qualified = [s for s in signals if "高危" not in s.target_pattern and "单薄" not in s.target_pattern]
+        # 排序与风控过滤：严格剔除高危烂板、高位派发、封成比过弱及封单单薄标的
+        qualified = [s for s in signals if "回避" not in s.target_pattern and "高危" not in s.target_pattern and "单薄" not in s.target_pattern]
         # 优先级：真正的尾盘回封涨停标的绝对排在第一梯队，蓄势未板次之，内部按综合得分严格降序
         qualified.sort(key=lambda s: (2 if "尾盘回封" in s.target_pattern else (1 if "蓄势未板" in s.target_pattern else 0), s.score), reverse=True)
-        # 14:58 尾盘集合竞价仅 90 秒操作窗口，精选输出不超过 Top 4 只最确定标的
-        return qualified[:4]
+        # 14:58 尾盘集合竞价仅 90 秒操作窗口，优中选优严格输出不超过 Top 3 只高胜率标的
+        return qualified[:3]
