@@ -28,8 +28,50 @@ class IntradayMonitor:
         self.seen_zt_stocks: Dict[str, Dict[str, Any]] = {}
         # 记录已提醒过的炸板股票及对应炸板次数: code -> last_alerted_zbc
         self.seen_zb_stocks: Dict[str, int] = {}
+        # 最新全市场盘中汇总统计（保留全市场涨停数、炸板数、炸板率、最高连板与主线）
+        self.latest_market_summary: Dict[str, Any] = {}
         # 初始化是否已完成底量建档
         self.is_initialized: bool = False
+
+    def _build_market_summary(
+        self,
+        zt_pool: Dict[str, Dict[str, Any]],
+        zb_pool: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """汇总全市场真实涨停/炸板大局观统计（不受个股 1进2/2进3/3进4 过滤限制）"""
+        from collections import Counter
+
+        zt_main = {
+            c: v for c, v in (zt_pool or {}).items()
+            if self.filter.is_main_board_code(c) and self.filter.is_valid_name(v.get("name", c))
+        }
+        zb_main = {
+            c: v for c, v in (zb_pool or {}).items()
+            if self.filter.is_main_board_code(c) and self.filter.is_valid_name(v.get("name", c))
+        }
+
+        limit_up_count = len(zt_main)
+        exploded_count = len(zb_main)
+        total_attempts = limit_up_count + exploded_count
+        exploded_ratio = (exploded_count / total_attempts * 100.0) if total_attempts > 0 else 0.0
+        highest_board = max(
+            [int(v.get("continuous_boards", 1) or 1) for v in zt_main.values()],
+            default=(1 if limit_up_count > 0 else 0)
+        )
+        industries = [v.get("industry") for v in zt_main.values() if v.get("industry")]
+        if industries:
+            top_2 = Counter(industries).most_common(2)
+            top_theme = " / ".join([f"{ind} ({cnt}家)" for ind, cnt in top_2])
+        else:
+            top_theme = "主板全市场轮动"
+
+        return {
+            "limit_up_count": limit_up_count,
+            "exploded_count": exploded_count,
+            "exploded_ratio": round(exploded_ratio, 1),
+            "highest_continuous_board": highest_board,
+            "top_theme": top_theme,
+        }
 
     def initialize_current_state(self):
         """盘中启动时先拉取一次当前盘口存量，避免把开盘前就已板的标的大批量当成新异动误报"""
@@ -45,6 +87,7 @@ class IntradayMonitor:
                 name = item.get("name", code)
                 if self.filter.is_main_board_code(code) and self.filter.is_valid_name(name):
                     self.seen_zb_stocks[code] = item.get("open_board_count", 1)
+            self.latest_market_summary = self._build_market_summary(zt_pool, zb_pool)
             self.is_initialized = True
         except Exception as e:
             print(f"[盘中监控初始化提示] {e}")
@@ -70,12 +113,14 @@ class IntradayMonitor:
         events: List[IntradayEvent] = []
         now_time_str = get_beijing_now().strftime("%H:%M:%S")
         allowed_prev = self._get_allowed_prev_zt_boards()
+        zt_pool: Dict[str, Dict[str, Any]] = {}
+        zb_pool: Dict[str, Dict[str, Any]] = {}
 
         # -------------------------------------------------------------
         # 1. 检查【涨停封板】异动（严格仅保留 今日2/3/4板 即 1进2/2进3/3进4）
         # -------------------------------------------------------------
         try:
-            zt_pool = self.provider.fetch_today_zt_pool_details()
+            zt_pool = self.provider.fetch_today_zt_pool_details() or {}
             for code, item in zt_pool.items():
                 if not self.filter.is_main_board_code(code):
                     continue
@@ -185,6 +230,7 @@ class IntradayMonitor:
         except Exception as e:
             logger.warning(f"盘中监控炸板查询异常: {e}")
 
+        self.latest_market_summary = self._build_market_summary(zt_pool, zb_pool)
         return events
 
     def _generate_limit_up_advice(

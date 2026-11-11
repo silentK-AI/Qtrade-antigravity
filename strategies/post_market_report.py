@@ -167,57 +167,83 @@ class PostMarketReportScreener:
 
     def run_report(self, raw_items: Optional[List[Dict[str, Any]]] = None) -> PostMarketReportData:
         """
-        生成全套盘后复盘报告数据（严格仅梳理 1进2 / 2进3 / 3进4 梯队标的）
+        生成全套盘后复盘报告数据：
+        - 顶部大局观统计（昨日涨停总数、连板数、断板数、晋级率、最高板、全梯队分布）保留全市场真实数据；
+        - 下方个股复盘与预案列表（report.items）严格仅梳理 1进2 / 2进3 / 3进4 标的。
         """
         is_live = (raw_items is None)
         if raw_items is None:
-            raw_items = self.provider.fetch_yesterday_limit_up_pool()
+            raw_items = self.provider.fetch_yesterday_limit_up_pool() or []
 
-        allowed_prev: Dict[str, int] = {}
+        prev_zt: Dict[str, int] = {}
         today_zt_pool: Dict[str, Dict[str, Any]] = {}
         if is_live:
             try:
                 prev_zt = self.provider.fetch_prev_day_zt_boards() or {}
-                allowed_prev = {
-                    code: int(yb) for code, yb in prev_zt.items()
-                    if int(yb or 0) in StockFilter.ALLOWED_YESTERDAY_BOARDS
-                }
             except Exception:
-                allowed_prev = {}
+                prev_zt = {}
             try:
                 today_zt_pool = self.provider.fetch_today_zt_pool_details() or {}
             except Exception:
                 today_zt_pool = {}
 
-            if not allowed_prev:
-                raw_items = []
-            else:
-                filtered_raw = []
-                for raw in raw_items:
-                    code = raw.get("code")
-                    if code not in allowed_prev:
-                        continue
-                    yb = allowed_prev[code]
-                    raw["yesterday_boards"] = yb
-                    if code in today_zt_pool and raw.get("is_today_limit_up"):
-                        raw["consecutive_boards"] = int(today_zt_pool[code].get("continuous_boards", yb + 1) or (yb + 1))
-                    filtered_raw.append(raw)
-                raw_items = filtered_raw
+        # 1. 全市场真实大局观汇总 + 筛选 1进2 / 2进3 / 3进4 目标梳理池
+        total_count = 0
+        continue_count = 0
+        broken_count = 0
+        tier_distribution: Dict[int, int] = {}
+        highest_board = 1
+        highest_stock_name = "暂无连板"
 
         analyzed_items: List[YesterdayLimitUpItem] = []
+
         for raw in raw_items:
-            yb_raw = raw.get("yesterday_boards")
-            if yb_raw is not None and int(yb_raw) not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+            code = raw.get("code", "")
+            name = raw.get("name", code)
+            is_lu = bool(raw.get("is_today_limit_up", False))
+            total_count += 1
+
+            yb = int(raw.get("yesterday_boards") or prev_zt.get(code, 0) or 0)
+            cb = raw.get("consecutive_boards")
+
+            if is_lu:
+                if cb is None:
+                    if code in today_zt_pool:
+                        cb = int(today_zt_pool[code].get("continuous_boards", 2) or 2)
+                    elif yb > 0:
+                        cb = yb + 1
+                    else:
+                        cb = self.provider.get_consecutive_board_count(code, True)
+                else:
+                    cb = int(cb)
+
+                if yb <= 0:
+                    yb = max(0, cb - 1)
+
+                continue_count += 1
+                tier_distribution[cb] = tier_distribution.get(cb, 0) + 1
+                if cb > highest_board:
+                    highest_board = cb
+                    highest_stock_name = f"{name} ({code}) [{cb}连板]"
+            else:
+                broken_count += 1
+                if cb is not None:
+                    cb = int(cb)
+                if yb <= 0 and (not is_live) and cb is not None:
+                    yb = cb
+
+            # 严格过滤：个股复盘明细列表仅保留 1进2 / 2进3 / 3进4 标的
+            if yb not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+                continue
+            if is_lu and cb not in StockFilter.ALLOWED_TODAY_BOARDS:
                 continue
 
-            cb_raw = raw.get("consecutive_boards")
-            if cb_raw is not None:
-                if raw.get("is_today_limit_up") and int(cb_raw) not in StockFilter.ALLOWED_TODAY_BOARDS:
-                    continue
-                if (not raw.get("is_today_limit_up")) and yb_raw is None and int(cb_raw) not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
-                    continue
+            raw_enriched = dict(raw)
+            raw_enriched["yesterday_boards"] = yb
+            if cb is not None:
+                raw_enriched["consecutive_boards"] = cb
 
-            item = self.analyze_item(raw)
+            item = self.analyze_item(raw_enriched)
             if item.yesterday_boards not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
                 continue
             if item.is_today_limit_up and item.consecutive_boards not in StockFilter.ALLOWED_TODAY_BOARDS:
@@ -232,23 +258,7 @@ class PostMarketReportScreener:
         broken_items.sort(key=lambda x: (x.close_pct, x.high_pct), reverse=True)
 
         all_sorted = continue_items + broken_items
-
-        total_count = len(analyzed_items)
-        continue_count = len(continue_items)
-        broken_count = len(broken_items)
         advancement_rate = (continue_count / total_count * 100) if total_count > 0 else 0.0
-
-        # 最高连板与梯队统计
-        tier_distribution: Dict[int, int] = {}
-        highest_board = 1
-        highest_stock_name = "暂无连板"
-
-        for item in continue_items:
-            b = item.consecutive_boards
-            tier_distribution[b] = tier_distribution.get(b, 0) + 1
-            if b > highest_board:
-                highest_board = b
-                highest_stock_name = f"{item.name} ({item.code}) [{b}连板]"
 
         # 明日打板总基调判断
         if advancement_rate >= 45.0 and highest_board >= 3:

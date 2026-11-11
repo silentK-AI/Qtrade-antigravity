@@ -495,6 +495,8 @@ class ServerDaemonScheduler:
         logger.info("[测试模式] 正在拉取今日真实涨停/炸板数据生成微信测试卡片...")
         try:
             zt = self.data_provider.fetch_today_zt_pool_details()
+            zb = self.data_provider.fetch_today_zb_pool_details()
+            market_summary = self.intraday_monitor._build_market_summary(zt, zb)
             target_items = [
                 (c, d) for c, d in zt.items()
                 if int(d.get("continuous_boards", 0) or 0) in StockFilter.ALLOWED_TODAY_BOARDS
@@ -518,7 +520,7 @@ class ServerDaemonScheduler:
                     reason=f"主力真实封板（{relay}），买一封单 {detail['seal_amount']/10000.0:.0f} 万元，所属行业: {detail.get('industry', '主板题材')}。",
                     industry=detail.get("industry", "主板题材")
                 )
-                self.pusher.push_intraday_events([ev1])
+                self.pusher.push_intraday_events([ev1], market_summary=market_summary)
                 return
         except Exception as e:
             logger.warning(f"获取真实涨停测试数据失败: {e}")
@@ -641,7 +643,10 @@ class ServerDaemonScheduler:
                             if events:
                                 if daily_intraday_alerts < MAX_DAILY_INTRADAY_ALERTS:
                                     logger.info(f"[{current_hms}] 盘中监测到 {len(events)} 起封板/炸板异动，正在推送微信...")
-                                    self.pusher.push_intraday_events(events)
+                                    self.pusher.push_intraday_events(
+                                        events,
+                                        market_summary=self.intraday_monitor.latest_market_summary
+                                    )
                                     daily_intraday_alerts += len(events)
                                 elif daily_intraday_alerts == MAX_DAILY_INTRADAY_ALERTS:
                                     logger.warning(f"今日盘中异动推送已达上限 ({MAX_DAILY_INTRADAY_ALERTS}次)，暂停后续微信通知以防刷屏")

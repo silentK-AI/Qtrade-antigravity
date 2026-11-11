@@ -102,6 +102,11 @@ class TestIntradayMonitor(unittest.TestCase):
         self.assertIn("1进2", ev.action_advice)
         self.assertIn("600609", self.monitor.seen_zt_stocks)
 
+        # 全市场盘中汇总应保留全部主板涨停(600609 + 600111 + 600803 = 3家，最高5板)
+        summary = self.monitor.latest_market_summary
+        self.assertEqual(summary["limit_up_count"], 3)
+        self.assertEqual(summary["highest_continuous_board"], 5)
+
         # 再次检查时状态去重，不再重复触发
         events_again = self.monitor.check_events()
         self.assertEqual(len(events_again), 0)
@@ -214,9 +219,20 @@ class TestIntradayMonitor(unittest.TestCase):
             action_advice="【建议：重点打板/参与 2 进 3 接力】",
             reason="1 进 2 换手晋级成功，确立身位优势。封单 6000 万元，承接有力。"
         )
-        title, md = self.pusher.format_intraday_events([ev1])
+        title, md = self.pusher.format_intraday_events(
+            [ev1],
+            market_summary={
+                "limit_up_count": 45,
+                "exploded_count": 8,
+                "exploded_ratio": 15.1,
+                "highest_continuous_board": 7,
+                "top_theme": "汽车零部 (11家)"
+            }
+        )
         self.assertIn("金杯汽车", title)
         self.assertIn("2连板", title)
+        self.assertIn("全市场实时", md)
+        self.assertIn("最高 **7** 板", md)
         self.assertIn("金杯汽车", md)
         self.assertIn("10:15:20", md)
         self.assertIn("重点打板", md)

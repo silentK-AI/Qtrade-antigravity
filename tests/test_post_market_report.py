@@ -104,17 +104,19 @@ class TestPostMarketReport(unittest.TestCase):
 
     def test_screener_output(self):
         report = self.screener.run_report(self.mock_dataset)
-        # 严格过滤：6连板(002578)与4进5断板(603888)被剔除，仅留4只 1进2/2进3/3进4 标的
-        self.assertEqual(report.total_yesterday_count, 4)
-        self.assertEqual(report.today_continue_count, 2)
-        self.assertEqual(report.broken_board_count, 2)
+        # 1. 顶部汇总保留全市场真实数据 (全部 6 只昨日涨停股：3只今日连板、3只断板、最高 6 连板)
+        self.assertEqual(report.total_yesterday_count, 6)
+        self.assertEqual(report.today_continue_count, 3)
+        self.assertEqual(report.broken_board_count, 3)
         self.assertEqual(report.advancement_rate, 50.0)
-        self.assertEqual(report.highest_board, 4)
-        self.assertIn("四板龙头", report.highest_board_stock)
+        self.assertEqual(report.highest_board, 6)
+        self.assertIn("闽发铝业", report.highest_board_stock)
+        self.assertEqual(report.tier_distribution, {6: 1, 4: 1, 3: 1})
 
-        # 检查连板股与断板股分类及高标剔除
+        # 2. 个股梳理列表严格仅保留 1进2/2进3/3进4 标的（剔除 6连板 002578 与 4进5断板 603888）
         items = report.items
         codes = [x.code for x in items]
+        self.assertEqual(len(items), 4)
         self.assertNotIn("002578", codes)
         self.assertNotIn("603888", codes)
         self.assertTrue(items[0].is_today_limit_up)
@@ -130,10 +132,11 @@ class TestPostMarketReport(unittest.TestCase):
         pusher = WeChatPusher()
         md = pusher.format_post_market_report(report)
         self.assertIn("15:10 盘后涨停复盘", md)
-        self.assertIn("连板晋级池", md)
-        self.assertIn("断板分歧池", md)
+        self.assertIn("全市场昨日涨停", md)
+        self.assertIn("闽发铝业 (002578) [6连板]", md)
+        self.assertIn("1进2 / 2进3 / 3进4 连板晋级池", md)
         self.assertIn("四板龙头", md)
-        self.assertNotIn("闽发铝业", md)
+        self.assertNotIn("002578)**", md)
 
 
 if __name__ == "__main__":

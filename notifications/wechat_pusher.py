@@ -245,15 +245,15 @@ class WeChatPusher:
     ) -> str:
         """格式化适合微信手机阅读的 15:10 盘后涨停复盘与次日预案报告"""
         lines = []
-        lines.append(f"### 📋【15:10 盘后涨停复盘·1进2/2进3/3进4】\n")
-        lines.append(f"> **生成时间**: {r.report_time} | **昨日1/2/3板**: **{r.total_yesterday_count}** 家")
-        lines.append(f"> **今日连板晋级**: <font color=\"#e74c3c\">**{r.today_continue_count}**</font> 家 | **断板**: {r.broken_board_count} 家 | **晋级率: {r.advancement_rate:.1f}%**")
-        lines.append(f"> **最高连板高度**: **{r.highest_board_stock}**")
+        lines.append(f"### 📋【15:10 盘后涨停复盘】(全市场大局观 + 1进2/2进3/3进4梳理)\n")
+        lines.append(f"> **生成时间**: {r.report_time} | **全市场昨日涨停**: **{r.total_yesterday_count}** 家")
+        lines.append(f"> **全市场连板晋级**: <font color=\"#e74c3c\">**{r.today_continue_count}**</font> 家 | **断板**: {r.broken_board_count} 家 | **全市场晋级率: {r.advancement_rate:.1f}%**")
+        lines.append(f"> **全市场最高连板**: **{r.highest_board_stock}**")
         
         # 梯队分布
         if r.tier_distribution:
             tier_str = " | ".join([f"{k}板 ({v}只)" for k, v in sorted(r.tier_distribution.items(), reverse=True)])
-            lines.append(f"> **连板梯队**: {tier_str}")
+            lines.append(f"> **全市场连板梯队**: {tier_str}")
         lines.append(f"> **明日打板总基调**: {r.sentiment_summary}\n")
 
         # 系统自建策略实战跟踪战绩（闭环验证）
@@ -282,7 +282,7 @@ class WeChatPusher:
         broken_items = [x for x in r.items if not x.is_today_limit_up]
 
         if continue_items:
-            lines.append(f"#### 🚀 【连板晋级池】(共 {len(continue_items)} 只·重点观察接力)\n")
+            lines.append(f"#### 🚀 【1进2 / 2进3 / 3进4 连板晋级池】(共 {len(continue_items)} 只·聚焦接力)\n")
             for idx, item in enumerate(continue_items, 1):
                 lines.append(f"**{idx}. {item.name} ({item.code})** —— {item.board_status}")
                 lines.append(f"- **今日表现**: 收盘 **{item.close_price:.2f}元** ({item.close_pct:+.2f}%) | 最高: **{item.high_pct:+.2f}%** | 最低: **{item.low_pct:+.2f}%**")
@@ -291,7 +291,7 @@ class WeChatPusher:
                 lines.append(f"- **预案要点**: {item.detail_reason}\n")
 
         if broken_items:
-            lines.append(f"#### ⚠️ 【断板分歧池】(精选前排·区分反包与风险)\n")
+            lines.append(f"#### ⚠️ 【1进2 / 2进3 / 3进4 断板分歧池】(仅梳理目标梯队)\n")
             for idx, item in enumerate(broken_items[:15], 1): # 选取最具代表性的断板标的
                 lines.append(f"**{idx}. {item.name} ({item.code})** —— {item.board_status}")
                 lines.append(f"- **今日表现**: 收盘 **{item.close_price:.2f}元** ({item.close_pct:+.2f}%) | 最高: **{item.high_pct:+.2f}%** | 最低: **{item.low_pct:+.2f}%**")
@@ -311,7 +311,11 @@ class WeChatPusher:
         markdown_body = self.format_post_market_report(report, history_eval=history_eval)
         return self._dispatch_push(title, markdown_body, log_tag="盘后复盘推送")
 
-    def format_intraday_events(self, events: List[IntradayEvent]) -> Tuple[str, str]:
+    def format_intraday_events(
+        self,
+        events: List[IntradayEvent],
+        market_summary: Optional[Dict[str, Any]] = None
+    ) -> Tuple[str, str]:
         """格式化盘中涨停封板/炸板异动提醒，返回 (title, markdown_content)"""
         if not events:
             return "", ""
@@ -334,7 +338,16 @@ class WeChatPusher:
 
         lines = []
         lines.append(f"### {title}\n")
-        lines.append(f"> **监控时段**: 09:30 - 14:50 盘中实时捕获 (1进2/2进3/3进4) | **捕获时间**: `{datetime.now().strftime('%H:%M:%S')}`\n")
+        lines.append(f"> **监控时段**: 09:30 - 14:50 盘中实时捕获 (1进2/2进3/3进4) | **捕获时间**: `{datetime.now().strftime('%H:%M:%S')}`")
+        if market_summary:
+            lines.append(
+                f"> **全市场实时**: 涨停 **{market_summary.get('limit_up_count', 0)}** 家 | "
+                f"炸板 **{market_summary.get('exploded_count', 0)}** 家 (炸板率 **{market_summary.get('exploded_ratio', 0.0):.1f}%**) | "
+                f"最高 **{market_summary.get('highest_continuous_board', 0)}** 板 | "
+                f"主线: {market_summary.get('top_theme', '主板全市场轮动')}\n"
+            )
+        else:
+            lines.append("")
 
         for idx, ev in enumerate(events, 1):
             industry_str = f" | 题材: **{ev.industry}**" if ev.industry else ""
@@ -357,11 +370,15 @@ class WeChatPusher:
         lines.append("---\n*量化策略系统实时监测，交易有风险，请遵守打板纪律*")
         return title, "\n".join(lines)
 
-    def push_intraday_events(self, events: List[IntradayEvent]) -> bool:
+    def push_intraday_events(
+        self,
+        events: List[IntradayEvent],
+        market_summary: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """推送盘中异动事件至微信"""
         if not events:
             return False
-        title, markdown_body = self.format_intraday_events(events)
+        title, markdown_body = self.format_intraday_events(events, market_summary=market_summary)
         return self._dispatch_push(title, markdown_body, log_tag="盘中异动推送")
 
     def push_intraday_event(self, event: IntradayEvent) -> bool:
