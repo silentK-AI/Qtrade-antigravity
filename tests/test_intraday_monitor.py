@@ -13,6 +13,14 @@ class TestIntradayMonitor(unittest.TestCase):
 
     def setUp(self):
         self.mock_provider = MagicMock()
+        self.mock_provider.fetch_prev_day_zt_boards.return_value = {
+            "600609": 1,
+            "002596": 1,
+            "600715": 1,
+            "600801": 2,
+            "600802": 3,
+            "600803": 4,
+        }
         self.monitor = IntradayMonitor(provider=self.mock_provider)
         self.pusher = WeChatPusher()
 
@@ -39,7 +47,7 @@ class TestIntradayMonitor(unittest.TestCase):
         self.mock_provider.fetch_today_zb_pool_details.return_value = {}
         self.monitor.initialize_current_state()
 
-        # 盘中发生新封板：主板 600609 金杯汽车 2连板，创业板 300123（需被过滤）
+        # 盘中发生新封板：主板 600609 金杯汽车 2连板 (1进2)，首板 (0进1) 与 5连板 (4进5) 及创业板 300123 均需被过滤
         self.mock_provider.fetch_today_zt_pool_details.return_value = {
             "600609": {
                 "name": "金杯汽车",
@@ -52,12 +60,34 @@ class TestIntradayMonitor(unittest.TestCase):
                 "last_seal_time": "10:15:20",
                 "turnover_rate": 5.2
             },
+            "600111": {
+                "name": "零进一首板",
+                "price": 10.0,
+                "change_pct": 10.0,
+                "seal_amount": 50000000.0,
+                "continuous_boards": 1,
+                "open_board_count": 0,
+                "first_seal_time": "10:10:00",
+                "last_seal_time": "10:10:00",
+                "turnover_rate": 4.0
+            },
+            "600803": {
+                "name": "四进五高标",
+                "price": 20.0,
+                "change_pct": 10.0,
+                "seal_amount": 50000000.0,
+                "continuous_boards": 5,
+                "open_board_count": 0,
+                "first_seal_time": "10:12:00",
+                "last_seal_time": "10:12:00",
+                "turnover_rate": 6.0
+            },
             "300123": {
                 "name": "创业板股",
                 "price": 20.0,
                 "change_pct": 20.0,
                 "seal_amount": 10000000.0,
-                "continuous_boards": 1,
+                "continuous_boards": 2,
                 "open_board_count": 0
             }
         }
@@ -69,7 +99,7 @@ class TestIntradayMonitor(unittest.TestCase):
         self.assertEqual(ev.code, "600609")
         self.assertEqual(ev.name, "金杯汽车")
         self.assertEqual(ev.continuous_boards, 2)
-        self.assertIn("2 进 3 接力", ev.action_advice)
+        self.assertIn("1进2", ev.action_advice)
         self.assertIn("600609", self.monitor.seen_zt_stocks)
 
         # 再次检查时状态去重，不再重复触发
@@ -93,7 +123,7 @@ class TestIntradayMonitor(unittest.TestCase):
         self.mock_provider.fetch_today_zb_pool_details.return_value = {}
         self.monitor.initialize_current_state()
 
-        # 随后海南瑞泽炸板，回落至 +7.5%
+        # 随后海南瑞泽 (昨日1板->1进2) 炸板回落至 +7.5%；而 0进1 (600111) 与 4进5 (600803) 炸板不得触发推送
         self.mock_provider.fetch_today_zb_pool_details.return_value = {
             "002596": {
                 "name": "海南瑞泽",
@@ -102,6 +132,22 @@ class TestIntradayMonitor(unittest.TestCase):
                 "open_board_count": 1,
                 "first_seal_time": "09:32:00",
                 "turnover_rate": 8.0
+            },
+            "600111": {
+                "name": "零进一炸板",
+                "current_price": 10.50,
+                "change_pct": 7.0,
+                "open_board_count": 1,
+                "first_seal_time": "09:36:00",
+                "turnover_rate": 6.0
+            },
+            "600803": {
+                "name": "四进五炸板",
+                "current_price": 20.50,
+                "change_pct": 7.0,
+                "open_board_count": 1,
+                "first_seal_time": "09:38:00",
+                "turnover_rate": 9.0
             }
         }
 
@@ -110,11 +156,12 @@ class TestIntradayMonitor(unittest.TestCase):
         ev = events[0]
         self.assertEqual(ev.event_type, "BROKEN_BOARD")
         self.assertEqual(ev.code, "002596")
+        self.assertEqual(ev.continuous_boards, 2)
         self.assertIn("低吸", ev.action_advice)
         self.assertNotIn("002596", self.monitor.seen_zt_stocks)
 
     def test_reseal_after_broken_board(self):
-        """测试炸板后顽强回封（烂板出妖/弱转强）识别"""
+        """测试 1进2 炸板后顽强回封（弱转强）识别"""
         self.mock_provider.fetch_today_zt_pool_details.return_value = {}
         self.mock_provider.fetch_today_zb_pool_details.return_value = {
             "600715": {
@@ -128,14 +175,14 @@ class TestIntradayMonitor(unittest.TestCase):
         }
         self.monitor.initialize_current_state()
 
-        # 文投控股重新回封！
+        # 文投控股重新回封 (昨日1板->今日2板 1进2)！
         self.mock_provider.fetch_today_zt_pool_details.return_value = {
             "600715": {
                 "name": "文投控股",
                 "price": 2.59,
                 "change_pct": 10.21,
                 "seal_amount": 35000000.0,
-                "continuous_boards": 1,
+                "continuous_boards": 2,
                 "open_board_count": 1,
                 "first_seal_time": "09:40:00",
                 "last_seal_time": "14:10:00",
@@ -148,7 +195,7 @@ class TestIntradayMonitor(unittest.TestCase):
         ev = events[0]
         self.assertEqual(ev.event_type, "LIMIT_UP")
         self.assertEqual(ev.code, "600715")
-        self.assertIn("烂板出妖", ev.action_advice)
+        self.assertIn("1进2", ev.action_advice)
         self.assertIn("弱转强", ev.reason)
 
     def test_wechat_formatting(self):

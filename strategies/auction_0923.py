@@ -25,10 +25,17 @@ class Auction0923Screener(BaseScreener):
         sentiment_multiplier: float = 1.0
     ) -> Tuple[float, float, str, Dict[str, Any], str]:
         """
-        计算 09:23 核心指标评分
+        计算 09:23 核心指标评分（严格仅梳理 1进2 / 2进3 / 3进4）
         """
-        factors = {}
-        pattern = "09:23竞价异动"
+        yb = self.stock_filter.extract_yesterday_boards(quote)
+        if yb not in self.stock_filter.ALLOWED_YESTERDAY_BOARDS:
+            return 0.0, 0.0, "非1进2/2进3/3进4标的", {
+                "【梯队】连板过滤": "非昨日1/2/3板，系统已严格过滤"
+            }, "不符合 1进2/2进3/3进4 接力范围"
+
+        relay_label = self.stock_filter.format_relay_label(yb)
+        factors = {"【连板梯队】": f"{relay_label}（昨日{yb}板）"}
+        pattern = f"【9:23竞价异动】{relay_label}"
 
         # -----------------------------------------------------------------
         # 一、 诱多虚假撤单过滤（9:19-9:20 撤单率检验）—— 一票否决项
@@ -98,15 +105,10 @@ class Auction0923Screener(BaseScreener):
             price_tech_score += 2.0
             factors["【价格】拟开盘价"] = f"+{gap:.2f}% (开盘强度一般)"
 
-        if "首板" in quote.yesterday_status:
-            price_tech_score += 10.0
-            pattern = "【9:23顶格锁单】1进2大单封死龙"
-            factors["【战法】形态配合"] = "昨首板干脆，今9:20后不可撤单阶段主力直接挂巨单封死"
-            expectation = "不可撤单阶段主力真金白银顶格封板，全天炸板率极低（封死一整天），次日极大概率继续顶涨停。"
-        else:
-            price_tech_score += 6.0
-            pattern = "【9:23抢筹】主板强势突破封板"
-            expectation = "不可撤单阶段大单急促扫盘锁定涨停，日内封板确定性极强，次日享受连板溢价。"
+        price_tech_score += 10.0
+        pattern = f"【9:23顶格锁单】{relay_label}大单封死龙"
+        factors["【战法】形态配合"] = f"昨{yb}板干脆封死，今9:20后不可撤单阶段主力直接挂巨单封死冲击{relay_label}"
+        expectation = f"不可撤单阶段主力真金白银顶格封板，全天完成{relay_label}封死概率高，次日继续享受连板溢价。"
 
         # -----------------------------------------------------------------
         # 四、 基础流动性与风控底分 (满分 15 分，占比 15%)
@@ -130,9 +132,11 @@ class Auction0923Screener(BaseScreener):
         signals = []
 
         for quote, snap in candidates:
-            if not self.stock_filter.filter_quote(quote):
+            if not self.stock_filter.filter_quote(quote) or not self.stock_filter.is_target_relay_quote(quote):
                 continue
 
+            yb = self.stock_filter.extract_yesterday_boards(quote)
+            relay_label = self.stock_filter.format_relay_label(yb)
             score, cap_score, pattern, factors, expectation = self.calculate_0923_score(
                 quote, snap, sentiment_multiplier
             )
@@ -145,7 +149,7 @@ class Auction0923Screener(BaseScreener):
                 signal = StrategySignal(
                     code=quote.code,
                     name=quote.name,
-                    strategy_type="09:23真金白银锁板",
+                    strategy_type=f"09:23真金白银锁板({relay_label})",
                     score=score,
                     capital_score=cap_score,
                     current_price=snap.indicative_price,

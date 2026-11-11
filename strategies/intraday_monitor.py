@@ -49,9 +49,19 @@ class IntradayMonitor:
         except Exception as e:
             print(f"[盘中监控初始化提示] {e}")
 
+    def _get_allowed_prev_zt_boards(self) -> Dict[str, int]:
+        """获取昨日 1板 / 2板 / 3板 主板标的映射（严格仅监控 1进2 / 2进3 / 3进4）"""
+        if not hasattr(self.provider, "fetch_prev_day_zt_boards"):
+            return {}
+        prev_zt = self.provider.fetch_prev_day_zt_boards() or {}
+        return {
+            code: int(yb) for code, yb in prev_zt.items()
+            if int(yb or 0) in self.filter.ALLOWED_YESTERDAY_BOARDS
+        }
+
     def check_events(self) -> List[IntradayEvent]:
         """
-        单次检查并返回最新发生的【涨停封板】与【炸板开板】异动事件
+        单次检查并返回最新发生的【涨停封板】与【炸板开板】异动事件（严格仅限 1进2 / 2进3 / 3进4）
         """
         if not self.is_initialized:
             self.initialize_current_state()
@@ -59,9 +69,10 @@ class IntradayMonitor:
 
         events: List[IntradayEvent] = []
         now_time_str = get_beijing_now().strftime("%H:%M:%S")
+        allowed_prev = self._get_allowed_prev_zt_boards()
 
         # -------------------------------------------------------------
-        # 1. 检查【涨停封板】异动
+        # 1. 检查【涨停封板】异动（严格仅保留 今日2/3/4板 即 1进2/2进3/3进4）
         # -------------------------------------------------------------
         try:
             zt_pool = self.provider.fetch_today_zt_pool_details()
@@ -72,10 +83,13 @@ class IntradayMonitor:
                 if not self.filter.is_valid_name(name):
                     continue
 
-                # 如果这只股票之前不在已封板列表中，说明刚刚完成封板！
+                lbc = int(item.get("continuous_boards", 1) or 1)
+                if lbc not in self.filter.ALLOWED_TODAY_BOARDS:
+                    continue
+
+                # 如果这只股票之前不在已封板列表中，说明刚刚完成 1进2/2进3/3进4 封板！
                 if code not in self.seen_zt_stocks:
                     fund_wan = float(item.get("seal_amount", 0.0) or 0.0) / 10000.0
-                    lbc = int(item.get("continuous_boards", 1) or 1)
                     zbc = int(item.get("open_board_count", 0) or 0)
                     fbt = item.get("first_seal_time", now_time_str)
                     lbt = item.get("last_seal_time", now_time_str)
@@ -114,7 +128,7 @@ class IntradayMonitor:
             logger.warning(f"盘中监控封板查询异常: {e}")
 
         # -------------------------------------------------------------
-        # 2. 检查【炸板开板】异动
+        # 2. 检查【炸板开板】异动（严格仅保留昨日1/2/3板冲击 2/3/4板时炸板）
         # -------------------------------------------------------------
         try:
             zb_pool = self.provider.fetch_today_zb_pool_details()
@@ -123,6 +137,10 @@ class IntradayMonitor:
                     continue
                 name = item.get("name", code)
                 if not self.filter.is_valid_name(name):
+                    continue
+
+                yb = int(item.get("yesterday_boards", 0) or allowed_prev.get(code, 0) or 0)
+                if yb not in self.filter.ALLOWED_YESTERDAY_BOARDS:
                     continue
 
                 curr_zbc = int(item.get("open_board_count", 1) or 1)
@@ -139,7 +157,8 @@ class IntradayMonitor:
                         pct=pct,
                         hs=hs,
                         zbc=curr_zbc,
-                        fbt=fbt
+                        fbt=fbt,
+                        yb=yb
                     )
 
                     event = IntradayEvent(
@@ -152,7 +171,7 @@ class IntradayMonitor:
                         seal_amount_wan=0.0,
                         turnover_rate=hs,
                         open_board_count=curr_zbc,
-                        continuous_boards=1,
+                        continuous_boards=yb + 1,
                         action_advice=advice,
                         reason=reason,
                         industry=str(item.get("industry", "") or "主板题材")
@@ -176,45 +195,44 @@ class IntradayMonitor:
         is_reseal: bool,
         seal_time: str
     ) -> Tuple[str, str]:
-        """输出涨停封板买入建议与原因"""
+        """输出 1进2 / 2进3 / 3进4 涨停封板买入建议与原因"""
+        relay = f"{lbc - 1}进{lbc}" if lbc in self.filter.ALLOWED_TODAY_BOARDS else f"{lbc}板"
+
         # 一字开盘封死处理 (竞价一字板，排单通道封死)
         if seal_time <= "09:25:00" and zbc == 0:
-            advice = "【建议：一字涨停·排队买不进/持股锁仓】"
-            reason = f"集合竞价直接巨单封死一字涨停，封单高达 {fund_wan:.0f} 万元堵死队列，无法挂单成交，持有者锁仓继续享受连板溢价。"
+            advice = f"【建议：{relay}一字涨停·排队买不进/持股锁仓】"
+            reason = f"集合竞价直接巨单封死{relay}一字涨停，封单高达 {fund_wan:.0f} 万元堵死队列，无法挂单成交，持有者锁仓继续享受连板溢价。"
             return advice, reason
 
         if is_reseal:
             if fund_wan >= 2000:
-                advice = "【建议：可轻仓打板/博烂板出妖】"
-                reason = f"日内经受 {zbc} 次炸板洗盘后顽强回封，主力再度斥资 {fund_wan:.0f} 万元死封买一，浮筹洗净确立弱转强，次日享受高开溢价。"
+                advice = f"【建议：{relay}分歧回封·可轻仓打板接力】"
+                reason = f"{relay}日内经受 {zbc} 次炸板洗盘后顽强回封，主力再度斥资 {fund_wan:.0f} 万元死封买一，浮筹洗净确立弱转强。"
             else:
-                advice = "【建议：弱次回封·封单偏薄谨慎接】"
-                reason = f"日内炸板 {zbc} 次后于 {seal_time} 虽重新封板，但封单仅 {fund_wan:.0f} 万元偏薄，筹码仍有松动风险，不建议激进追打。"
-        elif lbc >= 3:
+                advice = f"【建议：{relay}弱次回封·封单偏薄谨慎接】"
+                reason = f"{relay}日内炸板 {zbc} 次后于 {seal_time} 虽重新封板，但封单仅 {fund_wan:.0f} 万元偏薄，筹码仍有松动风险，不建议激进追打。"
+        elif lbc == 4:
             if fund_wan >= 4000:
-                advice = "【建议：空间龙头可排板/做高标接力】"
-                reason = f"主线空间总标杆强势晋级 {lbc} 连板！买一封单 {fund_wan:.0f} 万元极其硬朗，辨识度拉满，次日大概率加速一字或弱转强秒板。"
+                advice = "【建议：3进4换手晋级·核心龙头可排板】"
+                reason = f"主线强标顺利晋级 4 连板（3进4）！买一封单 {fund_wan:.0f} 万元极其硬朗，辨识度拉满。"
             else:
-                advice = "【建议：谨慎排板/防高位炸板】"
-                reason = f"虽晋级 {lbc} 板，但封单仅 {fund_wan:.0f} 万元偏薄，高位筹码一旦松动易出现大分歧，不建议盲目挂巨量排单。"
-        elif lbc == 2:
+                advice = "【建议：3进4封单偏薄·谨慎防高位炸板】"
+                reason = f"虽晋级 3进4，但封单仅 {fund_wan:.0f} 万元偏薄，高位筹码一旦松动易出现大分歧，不建议盲目挂巨量排单。"
+        elif lbc == 3:
+            if fund_wan >= 3500:
+                advice = "【建议：2进3主线卡位·重点排单打板】"
+                reason = f"2 进 3 强势晋级确立板块前排身位！买一封单 {fund_wan:.0f} 万元承接充足，次日享连板溢价预期。"
+            else:
+                advice = "【建议：弱三板·观察封单稳固度再打板】"
+                reason = f"2 进 3 封单仅 {fund_wan:.0f} 万元相对有限，需警惕盘中受板块分歧影响出现炸板。"
+        else:
+            # 1进2 (lbc == 2)
             if fund_wan >= 3000:
-                advice = "【建议：重点打板/参与 2 进 3 接力】"
+                advice = "【建议：1进2放量晋级·重点打板接力】"
                 reason = f"1 进 2 换手晋级成功，确立身位优势。封单 {fund_wan:.0f} 万元，承接有力，符合主线接力标准。"
             else:
                 advice = "【建议：弱二板·观察承接不盲目打板】"
                 reason = f"1 进 2 封单 {fund_wan:.0f} 万元相对偏小，需观察明日早盘集合竞价能否弱转强高开确认。"
-        else:
-            # 首板
-            if seal_time <= "10:00:00" and fund_wan >= 5000:
-                advice = "【建议：早盘急速首板·可排板介入】"
-                reason = f"早盘 {seal_time} 极速冲天炮秒板，主力抢筹极其果断，封单高达 {fund_wan:.0f} 万元，首板硬度极高，次日高溢价无忧。"
-            elif fund_wan >= 2000:
-                advice = "【建议：符合标准·可适度打板】"
-                reason = f"封板形态良好，买一封单 {fund_wan:.0f} 万元，量能配合健康，具备较好持续性。"
-            else:
-                advice = "【建议：不建议打板/后排跟风】"
-                reason = f"封单仅 {fund_wan:.0f} 万元偏弱，大概率属于板块后排跟风冲板，缺乏主动进攻性，谨防随时炸板。"
 
         return advice, reason
 
@@ -223,44 +241,47 @@ class IntradayMonitor:
         pct: float,
         hs: float,
         zbc: int,
-        fbt: str
+        fbt: str,
+        yb: int = 1
     ) -> Tuple[str, str]:
-        """输出炸板开板买入建议与原因（多维度筹码与盘口细分）"""
+        """输出 1进2 / 2进3 / 3进4 炸板开板买入建议与原因（多维度筹码与盘口细分）"""
+        relay = f"{yb}进{yb + 1}" if yb in self.filter.ALLOWED_YESTERDAY_BOARDS else "连板"
+
         # 1. 多次炸板 / 筹码反复松动 (>= 3 次) —— 极高风险
         if zbc >= 3:
-            advice = f"【建议：已反复炸板{zbc}次·严禁低吸/观望】"
-            reason = f"日内已发生 {zbc} 次炸板，多头接力资金明显疲态，获利盘反复出逃导致筹码松动恶化。即使价格暂守在 +{pct:.1f}%，也极易演变成午后跳水大面，坚决不接飞刀。"
+            advice = f"【建议：{relay}已反复炸板{zbc}次·严禁低吸/观望】"
+            reason = f"{relay}冲板日内已发生 {zbc} 次炸板，多头接力资金明显疲态，获利盘反复出逃导致筹码松动恶化。即使价格暂守在 +{pct:.1f}%，也极易演变成午后跳水大面，坚决不接飞刀。"
             return advice, reason
 
         # 2. 涨停档位微幅漏单 (涨幅 >= +9.5%) —— 极小分歧/盘口试盘
         if pct >= 9.5:
             if zbc == 1:
-                advice = "【建议：涨停微幅漏单·紧盯买单回补/可打板】"
-                reason = f"现价 +{pct:.2f}% 仅微幅脱离涨停，多空在涨停附近激烈换手，属于主力盘口换血或微量漏单。若买一迅速出现万手大单回封可果断排单；若抛压蔓延跌破 +9.0% 则立即停止排单。"
+                advice = f"【建议：{relay}涨停微幅漏单·紧盯回封可打板】"
+                reason = f"{relay}现价 +{pct:.2f}% 仅微幅脱离涨停，属于主力盘口换血或微量漏单。若买一迅速出现万手大单回封可果断排单；若抛压蔓延跌破 +9.0% 则立即停止排单。"
             else:
-                advice = "【建议：高位微开频发·防主力暗中出货】"
-                reason = f"虽维持在 +{pct:.2f}% 涨停边缘，但已是日内第 {zbc} 次开板，主力有涨停板对倒出货嫌疑，建议等待大单重新巨量死封再行跟随。"
+                advice = f"【建议：{relay}高位微开频发·防主力出货】"
+                reason = f"{relay}虽维持在 +{pct:.2f}% 涨停边缘，但已是日内第 {zbc} 次开板，主力有对倒出货嫌疑，建议等待大单重新死封再跟随。"
 
         # 3. 良性回踩分时均线 (+6.5% ~ +9.5%)
         elif pct >= 6.5:
             if hs <= 15.0:
-                advice = "【建议：回踩均线低吸·博主力秒回封】"
-                reason = f"第 {zbc} 次炸板后坚守在 +{pct:.1f}% 高位震荡，换手率 {hs:.1f}% 良性健康未现踩踏，早盘洗尽浮筹，回踩分时均线不破可小仓位低吸博主力弱转强回封。"
+                advice = f"【建议：{relay}回踩均线低吸·博秒回封】"
+                reason = f"{relay}第 {zbc} 次炸板后坚守在 +{pct:.1f}% 高位震荡，换手率 {hs:.1f}% 良性健康未现踩踏，回踩分时均线不破可小仓位低吸博主力弱转强回封。"
             elif hs <= 25.0:
-                advice = "【建议：分歧换手加剧·等待大单回封确认】"
-                reason = f"炸板后价格维持在 +{pct:.1f}%，但换手率已达 {hs:.1f}%，多空分歧显著放大，低吸容易被套，建议等待大单真正回封涨停瞬间再跟随打板。"
+                advice = f"【建议：{relay}分歧换手加剧·等待大单回封】"
+                reason = f"{relay}炸板后价格维持在 +{pct:.1f}%，但换手率已达 {hs:.1f}%，多空分歧显著放大，建议等待大单真正回封涨停瞬间再跟随打板。"
             else:
-                advice = "【建议：爆量高换手炸板·禁止追高】"
-                reason = f"换手率已飙升至 {hs:.1f}%，筹码剧烈派发，高位抛压沉重，即便回封也是烂板，盈亏比极差，禁止低吸追涨。"
+                advice = f"【建议：{relay}爆量高换手炸板·禁止追高】"
+                reason = f"{relay}换手率已飙升至 {hs:.1f}%，筹码剧烈派发，高位抛压沉重，即便回封也是烂板，盈亏比极差，禁止低吸追涨。"
 
         # 4. 中度跳水回落 (+2.0% ~ +6.5%)
         elif pct >= 2.0:
-            advice = "【建议：承接走弱·观望不接飞刀】"
-            reason = f"炸板后价格快速下坠至 +{pct:.1f}%，日内买盘承接严重不足，上方套牢盘堆积，此时介入极易反复吃面，观望为主。"
+            advice = f"【建议：{relay}炸板承接走弱·观望不接飞刀】"
+            reason = f"{relay}炸板后价格快速下坠至 +{pct:.1f}%，日内买盘承接严重不足，上方套牢盘堆积，此时介入极易反复吃面，观望为主。"
 
         # 5. 深度大面 (< +2.0% 或翻绿)
         else:
-            advice = "【建议：高位核按钮·坚决规避】"
-            reason = f"炸板后出现断崖式踩踏杀跌至 +{pct:.1f}%，主力资金坚决出逃，形态严重破位，次日大概率深水低开核按钮，严禁抄底。"
+            advice = f"【建议：{relay}炸板大面·坚决规避】"
+            reason = f"{relay}炸板后出现踩踏杀跌至 +{pct:.1f}%，主力资金坚决出逃，形态严重破位，次日大概率低开核按钮，严禁抄底。"
 
         return advice, reason

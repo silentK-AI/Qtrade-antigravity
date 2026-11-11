@@ -8,10 +8,11 @@ import time
 import json
 import urllib.request
 import urllib.parse
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any, Tuple
 from models.stock_item import StockQuote
 from utils.filters import StockFilter
-from utils.calendar import get_beijing_now
+from utils.calendar import TradeCalendar, get_beijing_now
 from utils.logger import get_logger
 
 logger = get_logger("open_data_provider")
@@ -38,6 +39,7 @@ class OpenDataProvider:
     def __init__(self, timeout: int = 5):
         self.timeout = timeout
         self.filter = StockFilter()
+        self._prev_zt_cache: Dict[str, Dict[str, int]] = {}
 
     def _get_url_content(self, url: str, encoding: str = "utf-8", max_retries: int = 3) -> str:
         req = urllib.request.Request(
@@ -373,7 +375,63 @@ class OpenDataProvider:
             except Exception as e:
                 logger.warning(f"抓取昨日涨停池第 {pn} 页失败: {e}")
                 break
+        prev_boards = self.fetch_prev_day_zt_boards()
+        if prev_boards:
+            for item in items:
+                if item["code"] in prev_boards:
+                    item["yesterday_boards"] = prev_boards[item["code"]]
         return items
+
+    def fetch_prev_day_zt_boards(self, target_date: Optional[str] = None) -> Dict[str, int]:
+        """
+        查询上一个交易日东财涨停池全部主板股票的连板高度映射: {code: lbc}
+        全系统据此精准识别 1进2 (昨日lbc=1)、2进3 (昨日lbc=2)、3进4 (昨日lbc=3)
+        """
+        if target_date:
+            clean_date = target_date.replace("-", "").strip()
+            anchor_dt = datetime.strptime(clean_date, "%Y%m%d")
+        else:
+            anchor_dt = get_beijing_now().replace(tzinfo=None)
+
+        anchor_key = anchor_dt.strftime("%Y%m%d")
+        if anchor_key in self._prev_zt_cache and self._prev_zt_cache[anchor_key]:
+            return dict(self._prev_zt_cache[anchor_key])
+
+        tried_days = 0
+        for offset in range(1, 16):
+            cand_dt = anchor_dt - timedelta(days=offset)
+            if not TradeCalendar.is_trading_day(cand_dt):
+                continue
+
+            prev_str = cand_dt.strftime("%Y%m%d")
+            tried_days += 1
+            url = (
+                f"https://push2ex.eastmoney.com/getTopicZTPool?"
+                f"ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=lbc:desc&date={prev_str}"
+            )
+            try:
+                content = self._get_url_content(url)
+                data = json.loads(content)
+                pool = (data.get("data") or {}).get("pool") or []
+                if pool:
+                    result: Dict[str, int] = {}
+                    for item in pool:
+                        code = str(item.get("c", "")).strip()
+                        name = str(item.get("n", "")).strip()
+                        if not code or not self.filter.is_main_board_code(code) or not self.filter.is_valid_name(name):
+                            continue
+                        lbc = int(_safe_float(item.get("lbc"), 1))
+                        result[code] = max(1, lbc)
+                    if result:
+                        self._prev_zt_cache[anchor_key] = result
+                        return dict(result)
+            except Exception as e:
+                logger.warning(f"获取前交易日 {prev_str} 涨停池连板高度失败: {e}")
+
+            if tried_days >= 3:
+                break
+
+        return {}
 
     def get_consecutive_board_count(self, code: str, is_today_limit_up: bool) -> int:
         """

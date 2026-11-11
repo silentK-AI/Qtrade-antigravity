@@ -26,6 +26,21 @@ class TestPostMarketReport(unittest.TestCase):
                 "consecutive_boards": 6
             },
             {
+                "code": "002588",
+                "name": "四板龙头",
+                "close_price": 11.00,
+                "pre_close": 10.00,
+                "close_pct": 10.00,
+                "high_pct": 10.00,
+                "low_pct": 10.00,
+                "turnover_rate": 4.2,
+                "amount_yi": 3.1,
+                "float_cap_yi": 38.0,
+                "is_today_limit_up": True,
+                "yesterday_boards": 3,
+                "consecutive_boards": 4
+            },
+            {
                 "code": "002086",
                 "name": "东方海洋",
                 "close_price": 4.37,
@@ -37,6 +52,7 @@ class TestPostMarketReport(unittest.TestCase):
                 "amount_yi": 27.2,
                 "float_cap_yi": 32.0,
                 "is_today_limit_up": True,
+                "yesterday_boards": 2,
                 "consecutive_boards": 3
             },
             {
@@ -51,6 +67,7 @@ class TestPostMarketReport(unittest.TestCase):
                 "amount_yi": 5.2,
                 "float_cap_yi": 28.0,
                 "is_today_limit_up": False,
+                "yesterday_boards": 1,
                 "consecutive_boards": 1
             },
             {
@@ -65,23 +82,43 @@ class TestPostMarketReport(unittest.TestCase):
                 "amount_yi": 8.0,
                 "float_cap_yi": 30.0,
                 "is_today_limit_up": False,
-                "consecutive_boards": 1
+                "yesterday_boards": 2,
+                "consecutive_boards": 2
+            },
+            {
+                "code": "603888",
+                "name": "四进五断板高标",
+                "close_price": 9.10,
+                "pre_close": 10.00,
+                "close_pct": -9.00,
+                "high_pct": 2.00,
+                "low_pct": -9.50,
+                "turnover_rate": 30.0,
+                "amount_yi": 9.0,
+                "float_cap_yi": 35.0,
+                "is_today_limit_up": False,
+                "yesterday_boards": 4,
+                "consecutive_boards": 4
             }
         ]
 
     def test_screener_output(self):
         report = self.screener.run_report(self.mock_dataset)
+        # 严格过滤：6连板(002578)与4进5断板(603888)被剔除，仅留4只 1进2/2进3/3进4 标的
         self.assertEqual(report.total_yesterday_count, 4)
         self.assertEqual(report.today_continue_count, 2)
         self.assertEqual(report.broken_board_count, 2)
         self.assertEqual(report.advancement_rate, 50.0)
-        self.assertEqual(report.highest_board, 6)
-        self.assertIn("闽发铝业", report.highest_board_stock)
+        self.assertEqual(report.highest_board, 4)
+        self.assertIn("四板龙头", report.highest_board_stock)
 
-        # 检查连板股与断板股分类
+        # 检查连板股与断板股分类及高标剔除
         items = report.items
+        codes = [x.code for x in items]
+        self.assertNotIn("002578", codes)
+        self.assertNotIn("603888", codes)
         self.assertTrue(items[0].is_today_limit_up)
-        self.assertEqual(items[0].consecutive_boards, 6)
+        self.assertEqual(items[0].consecutive_boards, 4)
         self.assertIn("一字", items[0].board_status)
 
         # 检查深水大面股建议
@@ -95,7 +132,8 @@ class TestPostMarketReport(unittest.TestCase):
         self.assertIn("15:10 盘后涨停复盘", md)
         self.assertIn("连板晋级池", md)
         self.assertIn("断板分歧池", md)
-        self.assertIn("闽发铝业", md)
+        self.assertIn("四板龙头", md)
+        self.assertNotIn("闽发铝业", md)
 
 
 if __name__ == "__main__":

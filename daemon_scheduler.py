@@ -27,6 +27,7 @@ from strategies.market_sentiment import MarketSentimentAnalyzer
 from strategies.post_market_report import PostMarketReportScreener
 from strategies.intraday_monitor import IntradayMonitor
 from utils.calendar import TradeCalendar, get_beijing_now
+from utils.filters import StockFilter
 from utils.logger import get_logger
 from data.history_tracker import SignalHistoryTracker
 
@@ -71,20 +72,34 @@ class ServerDaemonScheduler:
                     rq.is_limit_up = (ind_price >= limit_up_price - 0.01)
         return rq
 
+    def _get_allowed_prev_zt_boards(self) -> Dict[str, int]:
+        """获取昨日 1板 / 2板 / 3板 主板股票池映射（系统仅梳理 1进2、2进3、3进4）"""
+        prev_zt = self.data_provider.fetch_prev_day_zt_boards()
+        return {
+            code: yb for code, yb in prev_zt.items()
+            if yb in StockFilter.ALLOWED_YESTERDAY_BOARDS
+        }
+
     def _capture_0919_snapshot(self):
-        """09:19:50 锚定抓取集合竞价可撤单峰值（记录买一挂单量与拟撮合价，用于9:23判定虚假撤单）"""
+        """09:19:50 锚定抓取集合竞价可撤单峰值（仅聚焦昨日1/2/3板，用于9:23判定虚假撤单）"""
         print("[09:19:50] 正在锚定集合竞价可撤单峰值盘口快照...")
         try:
-            active_quotes = self.data_provider.fetch_main_board_top_active(page_size=200)
-            yest_pool = self.data_provider.fetch_yesterday_limit_up_pool()
+            allowed_prev = self._get_allowed_prev_zt_boards()
+            if not allowed_prev:
+                self.snapshot_0919 = {}
+                print("[09:19:50] 昨日1/2/3板候选池为空，跳过快照锁定。")
+                return
+            active_quotes = self.data_provider.fetch_main_board_top_active(page_size=200) or []
             clist_map = {q.code: q for q in active_quotes}
-            candidate_codes = list(dict.fromkeys(
-                [q.code for q in active_quotes if q.change_pct >= 2.0][:80] +
-                [item["code"] for item in yest_pool]
-            ))
+            candidate_codes = list(allowed_prev.keys())
             real_quotes = self.data_provider.fetch_realtime_quotes(candidate_codes) if candidate_codes else []
             snapshot: Dict[str, Any] = {}
             for rq in real_quotes:
+                yb = allowed_prev.get(rq.code, 0)
+                if yb not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+                    continue
+                rq.yesterday_boards = yb
+                rq.yesterday_status = StockFilter.format_yesterday_status(yb)
                 self._resolve_auction_quote(rq, clist_map.get(rq.code))
                 snapshot[rq.code] = {
                     "quote": rq,
@@ -94,16 +109,21 @@ class ServerDaemonScheduler:
                     "price": rq.current_price,
                 }
             self.snapshot_0919 = snapshot
-            print(f"[09:19:50] 集合竞价峰值快照已锁定，共锁定 {len(self.snapshot_0919)} 只活跃标的！")
+            print(f"[09:19:50] 集合竞价峰值快照已锁定，共锁定 {len(self.snapshot_0919)} 只 1进2/2进3/3进4 候选标的！")
         except Exception as e:
             print(f"[09:19:50] 快照采集跳过: {e}")
 
     def _capture_1430_snapshot(self):
-        """14:30:00 锁定尾盘基准成交量快照（用于14:50精准计算尾盘真实放量占比）"""
+        """14:30:00 锁定尾盘基准成交量快照（仅聚焦昨日1/2/3板，用于14:50精准计算尾盘真实放量占比）"""
         print("[14:30:00] 正在锁定 14:30 尾盘量能基准快照...")
         try:
-            quotes = self.data_provider.fetch_main_board_top_active(page_size=150)
-            self.snapshot_1430 = {q.code: q.volume for q in quotes}
+            allowed_prev = self._get_allowed_prev_zt_boards()
+            if not allowed_prev:
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=150) or []
+                self.snapshot_1430 = {q.code: q.volume for q in quotes}
+            else:
+                quotes = self.data_provider.fetch_realtime_quotes(list(allowed_prev.keys())) or []
+                self.snapshot_1430 = {q.code: q.volume for q in quotes}
             print(f"[14:30:00] 尾盘基准量能快照已锁定，共记录 {len(self.snapshot_1430)} 只标的！")
         except Exception as e:
             print(f"[14:30:00] 尾盘快照采集跳过: {e}")
@@ -111,23 +131,17 @@ class ServerDaemonScheduler:
     def _get_0923_candidates(self) -> List[Tuple[StockQuote, Snapshot0923]]:
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=200) or []
-                yest_pool = self.data_provider.fetch_yesterday_limit_up_pool()
-                yest_map = {item["code"]: item for item in yest_pool}
-                clist_map = {q.code: q for q in quotes}
-
-                # 合并榜首高开股 + 昨日涨停连板池 + 09:19竞价快照池，防集合竞价阶段榜单遗漏
-                all_codes = list(dict.fromkeys(
-                    [q.code for q in quotes if q.change_pct >= 2.5] +
-                    list(yest_map.keys()) +
-                    list(self.snapshot_0919.keys())
-                ))
-                if not all_codes:
+                allowed_prev = self._get_allowed_prev_zt_boards()
+                if not allowed_prev:
+                    logger.warning("09:23 未获取到昨日 1/2/3 板标的池，严格空池返回以防混入非连板标的。")
                     return []
 
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=200) or []
+                clist_map = {q.code: q for q in quotes}
+                all_codes = list(allowed_prev.keys())
                 real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(all_codes)}
                 candidates = []
-                for code in all_codes:
+                for code, yb in allowed_prev.items():
                     rq = real_quotes.get(code) or clist_map.get(code)
                     if not rq or not self.data_provider.filter.filter_quote(rq):
                         continue
@@ -136,8 +150,8 @@ class ServerDaemonScheduler:
                     if not (4.0 <= rq.change_pct <= 10.5):
                         continue
 
-                    if code in yest_map and "首板" not in rq.yesterday_status:
-                        rq.yesterday_status = "昨日首板"
+                    rq.yesterday_boards = yb
+                    rq.yesterday_status = StockFilter.format_yesterday_status(yb)
 
                     # 计算 09:19:50 到 09:23:05 的买一挂单撤单率（兼容成交量为0的集合竞价阶段）
                     prev_data = self.snapshot_0919.get(rq.code, {})
@@ -180,23 +194,22 @@ class ServerDaemonScheduler:
         return MockReplayProvider.get_0923_dataset()
 
     def _get_0925_candidates(self) -> List[Tuple[StockQuote, AuctionSnapshot]]:
-        """获取 09:25 开盘集合竞价候选标的（打板与首板/1进2）"""
+        """获取 09:25 开盘集合竞价候选标的（严格仅梳理 1进2 / 2进3 / 3进4）"""
         if self.source == "live":
             try:
-                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=300)
-                yesterday_zt = {item["code"]: item for item in self.data_provider.fetch_yesterday_limit_up_pool()}
-                if not active_quotes and not yesterday_zt:
+                allowed_prev = self._get_allowed_prev_zt_boards()
+                if not allowed_prev:
+                    logger.warning("09:25 未获取到昨日 1/2/3 板标的池，严格空池返回。")
                     return []
-                gap_quotes = [q for q in active_quotes if 1.5 <= q.change_pct <= 9.9]
-                codes = list(dict.fromkeys([q.code for q in gap_quotes[:60]] + list(yesterday_zt.keys())))
-                if not codes:
-                    return []
+
+                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=300) or []
+                codes = list(allowed_prev.keys())
                 real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
                 prev_day_vols = self.data_provider.fetch_prev_day_volumes(codes)
 
                 clist_map = {q.code: q for q in active_quotes}
                 candidates = []
-                for code in codes:
+                for code, yb in allowed_prev.items():
                     rq = real_quotes.get(code) or clist_map.get(code)
                     if not rq or not self.data_provider.filter.filter_quote(rq):
                         continue
@@ -204,8 +217,9 @@ class ServerDaemonScheduler:
                     gap_pct = ((open_p - rq.pre_close) / rq.pre_close * 100.0) if rq.pre_close > 0 else rq.change_pct
                     if not (1.5 <= gap_pct <= 9.95):
                         continue
-                    if code in yesterday_zt:
-                        rq.yesterday_status = "昨日首板"
+
+                    rq.yesterday_boards = yb
+                    rq.yesterday_status = StockFilter.format_yesterday_status(yb)
 
                     unmatched_vol = rq.buy1_volume
                     unmatched_amt = rq.buy1_price * unmatched_vol
@@ -271,40 +285,55 @@ class ServerDaemonScheduler:
     def _get_1450_candidates(self) -> List[Tuple[StockQuote, ClosingSnapshot]]:
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
-                if quotes:
-                    candidates = []
-                    for q in quotes:
-                        if not (4.0 <= q.change_pct <= 10.5):
-                            continue
-                        ratio = (q.current_price / q.high_price) if q.high_price > 0 else 1.0
+                allowed_prev = self._get_allowed_prev_zt_boards()
+                if not allowed_prev:
+                    logger.warning("14:50 未获取到昨日 1/2/3 板标的池，严格空池返回。")
+                    return []
 
-                        vol_1430 = self.snapshot_1430.get(q.code, 0.0)
-                        if vol_1430 > 0 and q.volume >= vol_1430:
-                            tail_vol = q.volume - vol_1430
-                            tail_ratio = tail_vol / q.volume
-                        else:
-                            tail_vol = 0.0
-                            tail_ratio = 0.0
+                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=500) or []
+                clist_map = {q.code: q for q in active_quotes}
+                real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(list(allowed_prev.keys()))}
 
-                        tail_inflow_wan = q.net_large_inflow / 10000.0
+                candidates = []
+                for code, yb in allowed_prev.items():
+                    q = real_quotes.get(code) or clist_map.get(code)
+                    if not q or not self.data_provider.filter.filter_quote(q):
+                        continue
+                    if q.net_large_inflow == 0.0 and code in clist_map:
+                        q.net_large_inflow = clist_map[code].net_large_inflow
+                    if not (4.0 <= q.change_pct <= 10.5):
+                        continue
 
-                        snap = ClosingSnapshot(
-                            code=q.code,
-                            current_price=q.current_price,
-                            day_high=q.high_price,
-                            close_to_high_ratio=ratio,
-                            current_change_pct=q.change_pct,
-                            vwap=q.vwap,
-                            is_above_vwap=(q.current_price >= q.vwap),
-                            tail_volume=tail_vol,
-                            total_volume=q.volume,
-                            tail_vol_ratio=tail_ratio,
-                            tail_net_large_inflow=tail_inflow_wan,
-                            is_rebound_limit=(q.change_pct >= 9.8 and q.low_price < q.current_price * 0.95)
-                        )
-                        candidates.append((q, snap))
-                    return candidates
+                    q.yesterday_boards = yb
+                    q.yesterday_status = StockFilter.format_yesterday_status(yb)
+                    ratio = (q.current_price / q.high_price) if q.high_price > 0 else 1.0
+
+                    vol_1430 = self.snapshot_1430.get(q.code, 0.0)
+                    if vol_1430 > 0 and q.volume >= vol_1430:
+                        tail_vol = q.volume - vol_1430
+                        tail_ratio = tail_vol / q.volume
+                    else:
+                        tail_vol = 0.0
+                        tail_ratio = 0.0
+
+                    tail_inflow_wan = q.net_large_inflow / 10000.0
+
+                    snap = ClosingSnapshot(
+                        code=q.code,
+                        current_price=q.current_price,
+                        day_high=q.high_price,
+                        close_to_high_ratio=ratio,
+                        current_change_pct=q.change_pct,
+                        vwap=q.vwap,
+                        is_above_vwap=(q.current_price >= q.vwap),
+                        tail_volume=tail_vol,
+                        total_volume=q.volume,
+                        tail_vol_ratio=tail_ratio,
+                        tail_net_large_inflow=tail_inflow_wan,
+                        is_rebound_limit=(q.change_pct >= 9.8 and q.low_price < q.current_price * 0.95)
+                    )
+                    candidates.append((q, snap))
+                return candidates
             except Exception as e:
                 logger.error(f"14:50 实时接口获取异常: {e}", exc_info=True)
             return []
@@ -313,26 +342,37 @@ class ServerDaemonScheduler:
     def _get_1458_candidates(self) -> List[Tuple[StockQuote, Snapshot1458]]:
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=500) or []
+                allowed_prev = self._get_allowed_prev_zt_boards()
+                if not allowed_prev:
+                    logger.warning("14:58 未获取到昨日 1/2/3 板标的池，严格空池返回。")
+                    return []
+
+                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=500) or []
+                clist_map = {q.code: q for q in active_quotes}
                 zt_details = self.data_provider.fetch_today_zt_pool_details()
+                real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(list(allowed_prev.keys()))}
 
-                # 确保今日涨停池中全部合规主板标的都不被榜单截断遗漏 (修复 clist 截断盲区)
-                if zt_details:
-                    existing_codes = {q.code for q in quotes}
-                    missing_zt_codes = [
-                        code for code, d in zt_details.items()
-                        if code not in existing_codes
-                        and self.data_provider.filter.is_main_board_code(code)
-                        and self.data_provider.filter.is_valid_name(d.get("name", ""))
-                    ]
-                    if missing_zt_codes:
-                        extra_quotes = self.data_provider.fetch_realtime_quotes(missing_zt_codes)
-                        for eq in extra_quotes:
-                            if self.data_provider.filter.filter_quote(eq):
-                                quotes.append(eq)
+                filtered_quotes = []
+                for code, yb in allowed_prev.items():
+                    q = real_quotes.get(code) or clist_map.get(code)
+                    if not q or not self.data_provider.filter.filter_quote(q):
+                        continue
+                    if q.net_large_inflow == 0.0 and code in clist_map:
+                        q.net_large_inflow = clist_map[code].net_large_inflow
+                    if not (5.5 <= q.change_pct <= 10.5):
+                        continue
 
-                if quotes:
-                    filtered_quotes = [q for q in quotes if 5.5 <= q.change_pct <= 10.5]
+                    detail = zt_details.get(code, {})
+                    lbc = int(detail.get("continuous_boards", (yb + 1) if q.change_pct >= 9.8 else 0) or 0)
+                    is_lu = (q.change_pct >= 9.8 and (bool(detail) or (q.buy1_volume > 0 and q.sell1_volume == 0)))
+                    if is_lu and lbc not in StockFilter.ALLOWED_TODAY_BOARDS:
+                        continue
+
+                    q.yesterday_boards = yb
+                    q.yesterday_status = StockFilter.format_yesterday_status(yb)
+                    filtered_quotes.append(q)
+
+                if filtered_quotes:
                     # 仅对午后/回封/炸板/蓄势候选并发拉取近3日真实累计换手与近5日涨幅
                     tail_codes = []
                     for q in filtered_quotes:
@@ -354,7 +394,8 @@ class ServerDaemonScheduler:
                         lbt = detail.get("last_seal_time", fbt)
                         zbc = int(detail.get("open_board_count", 0) or 0)
                         fund = float(detail.get("seal_amount", 0.0) or 0.0)
-                        lbc = int(detail.get("continuous_boards", 1 if q.change_pct >= 9.8 else 0) or 0)
+                        yb = StockFilter.extract_yesterday_boards(q)
+                        lbc = int(detail.get("continuous_boards", (yb + 1) if q.change_pct >= 9.8 else 0) or 0)
 
                         is_lu = (q.change_pct >= 9.8 and (bool(detail) or (q.buy1_volume > 0 and q.sell1_volume == 0)))
                         float_cap = q.float_market_cap * 100000000.0 if q.float_market_cap > 0 else 0.0
@@ -390,7 +431,7 @@ class ServerDaemonScheduler:
         logger.info(f"触发定时量化任务: 【{task_type}】...")
 
         if task_type == "0923":
-            title = f"🔔【09:23 早盘锁板精选】(全天封死+次日涨停)"
+            title = f"🔔【09:23 早盘锁板精选·1进2/2进3/3进4】"
             screener = Auction0923Screener()
             dataset = self._get_0923_candidates()
             quotes = [q for q, _ in dataset] if dataset else None
@@ -402,7 +443,7 @@ class ServerDaemonScheduler:
                 self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "0925":
-            title = f"🚀【09:25 开盘竞价打板精选】"
+            title = f"🚀【09:25 开盘竞价接力·1进2/2进3/3进4】"
             screener = MorningAuctionScreener()
             dataset = self._get_0925_candidates()
             quotes = [q for q, _ in dataset] if dataset else None
@@ -414,7 +455,7 @@ class ServerDaemonScheduler:
                 self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "1450":
-            title = f"📊【14:50 尾盘蓄势冲板精选】"
+            title = f"📊【14:50 尾盘蓄势接力·1进2/2进3/3进4】"
             screener = ClosingStageScreener()
             dataset = self._get_1450_candidates()
             quotes = [q for q, _ in dataset] if dataset else None
@@ -426,7 +467,7 @@ class ServerDaemonScheduler:
                 self.history_tracker.record_signals(task_type, signals)
 
         elif task_type == "1458":
-            title = f"🎯【14:58 尾盘竞价锁定】(次日大概率涨停)"
+            title = f"🎯【14:58 尾盘竞价锁定·1进2/2进3/3进4】"
             screener = Closing1458Screener()
             dataset = self._get_1458_candidates()
             quotes = [q for q, _ in dataset] if dataset else None
@@ -454,8 +495,14 @@ class ServerDaemonScheduler:
         logger.info("[测试模式] 正在拉取今日真实涨停/炸板数据生成微信测试卡片...")
         try:
             zt = self.data_provider.fetch_today_zt_pool_details()
-            if zt:
-                code, detail = next(iter(zt.items()))
+            target_items = [
+                (c, d) for c, d in zt.items()
+                if int(d.get("continuous_boards", 0) or 0) in StockFilter.ALLOWED_TODAY_BOARDS
+            ]
+            if target_items:
+                code, detail = target_items[0]
+                lbc = int(detail["continuous_boards"])
+                relay = f"{lbc - 1}进{lbc}"
                 ev1 = IntradayEvent(
                     event_type="LIMIT_UP",
                     code=code,
@@ -466,9 +513,9 @@ class ServerDaemonScheduler:
                     seal_amount_wan=detail["seal_amount"] / 10000.0,
                     turnover_rate=detail["turnover_rate"],
                     open_board_count=detail["open_board_count"],
-                    continuous_boards=detail["continuous_boards"],
-                    action_advice="【建议：重点关注主线连板接力】",
-                    reason=f"主力真实封板，买一封单 {detail['seal_amount']/10000.0:.0f} 万元，所属行业: {detail.get('industry', '主板题材')}。",
+                    continuous_boards=lbc,
+                    action_advice=f"【建议：重点关注主线 {relay} 连板接力】",
+                    reason=f"主力真实封板（{relay}），买一封单 {detail['seal_amount']/10000.0:.0f} 万元，所属行业: {detail.get('industry', '主板题材')}。",
                     industry=detail.get("industry", "主板题材")
                 )
                 self.pusher.push_intraday_events([ev1])
@@ -487,9 +534,9 @@ class ServerDaemonScheduler:
             seal_amount_wan=50000.0,
             turnover_rate=3.0,
             open_board_count=0,
-            continuous_boards=1,
+            continuous_boards=2,
             action_advice="【此条仅为微信推送通道连通性测试】",
-            reason="系统网络连接正常，微信推送通道正常工作。",
+            reason="系统网络连接正常，微信推送通道正常工作（1进2/2进3/3进4监控就绪）。",
             industry="通道测试"
         )
         self.pusher.push_intraday_events([ev1])

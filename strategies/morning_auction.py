@@ -30,11 +30,18 @@ class MorningAuctionScreener(BaseScreener):
         sentiment_multiplier: float = 1.0
     ) -> Tuple[float, float, str, Dict[str, Any], str]:
         """
-        计算个股早盘竞价打板评分
+        计算个股早盘竞价打板评分（严格仅梳理 1进2 / 2进3 / 3进4）
         返回: (综合总分, 资金因子专属得分, 形态战法, 核心因子字典, 次日预期)
         """
-        factors = {}
-        pattern = "常规竞价异动"
+        yb = self.stock_filter.extract_yesterday_boards(quote)
+        if yb not in self.stock_filter.ALLOWED_YESTERDAY_BOARDS:
+            return 0.0, 0.0, "非1进2/2进3/3进4标的", {
+                "【梯队】连板过滤": "非昨日1/2/3板，系统已严格过滤"
+            }, "不符合 1进2/2进3/3进4 接力范围"
+
+        relay_label = self.stock_filter.format_relay_label(yb)
+        factors = {"【连板梯队】": f"{relay_label}（昨日{yb}板）"}
+        pattern = f"【{relay_label}】常规竞价接力"
 
         # -----------------------------------------------------------------
         # 一、 资金核心因子 (满分 55 分，占比 55%)
@@ -118,21 +125,11 @@ class MorningAuctionScreener(BaseScreener):
             factors["【价格】高开溢价幅度"] = f"{gap:.2f}% (低开弱势)"
         price_tech_score += score_gap
 
-        # 2. 核心战法加成（1进2 / 弱转强）(满分 12 分)
-        expectation = "早盘竞价量价配合，预期日内拉升冲板并奠定次日连板基础。"
-        if "首板" in quote.yesterday_status:
-            price_tech_score += 12.0
-            pattern = "【1进2】竞价加速接力"
-            factors["【战法】历史形态"] = "昨首板干脆封死，今日竞价资金爆量加速"
-            expectation = "首板晋级二板最强共识，竞价爆量承接坚决，预期日内快速封死涨停，次日享受高溢价或二连板。"
-        elif ("冲高" in quote.yesterday_status or "炸板" in quote.yesterday_status or "阴线" in quote.yesterday_status) and gap >= 1.5:
-            price_tech_score += 11.0
-            pattern = "【弱转强】竞价反包洗盘"
-            factors["【战法】历史形态"] = "昨日大阴/炸板洗盘，今日竞价超预期反包"
-            expectation = "昨日空头筹码洗净，今日主力高开强行承接完成弱转强，预计日内拉板完成反包大长腿。"
-        else:
-            price_tech_score += 5.0
-            pattern = "主板弹性突破"
+        # 2. 核心战法加成（1进2 / 2进3 / 3进4 接力）(满分 12 分)
+        price_tech_score += 12.0
+        pattern = f"【{relay_label}】竞价加速接力"
+        factors["【战法】历史形态"] = f"昨{yb}板干脆封死，今日竞价资金爆量加速冲击{relay_label}"
+        expectation = f"{relay_label}最强接力共识，竞价爆量承接坚决，预期日内快速封死涨停，奠定连板优势。"
 
         # -----------------------------------------------------------------
         # 三、 基础流动性与风控底分 (满分 15 分，占比 15%)
@@ -157,25 +154,24 @@ class MorningAuctionScreener(BaseScreener):
         signals = []
 
         for quote, auction in candidates:
-            if not self.stock_filter.filter_quote(quote):
+            if not self.stock_filter.filter_quote(quote) or not self.stock_filter.is_target_relay_quote(quote):
                 continue
 
+            yb = self.stock_filter.extract_yesterday_boards(quote)
+            relay_label = self.stock_filter.format_relay_label(yb)
             score, cap_score, pattern, factors, expectation = self.calculate_auction_score(
                 quote, auction, sentiment_multiplier
             )
 
             if score >= self.config.SCORE_THRESHOLD:
-                if "1进2" in pattern:
-                    action = "09:25直接市价挂单 / 开盘若秒板直接挂排单"
-                else:
-                    action = "开盘分时回踩均线分批低吸，放量冲高确认时加仓"
+                action = f"09:25直接市价挂单 / 冲击{relay_label}若秒板直接挂排单"
 
                 stop_loss = self.calculate_stop_loss(auction.auction_price, risk_tolerance_pct=4.0)
 
                 signal = StrategySignal(
                     code=quote.code,
                     name=quote.name,
-                    strategy_type="早盘竞价打板",
+                    strategy_type=f"早盘竞价接力({relay_label})",
                     score=score,
                     capital_score=cap_score,
                     current_price=auction.auction_price,

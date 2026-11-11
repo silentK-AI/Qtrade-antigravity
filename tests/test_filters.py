@@ -57,6 +57,29 @@ class TestStockFilter(unittest.TestCase):
         # 正常区间
         self.assertTrue(self.filter.check_market_cap(55.0))
 
+    def test_relay_board_filter(self):
+        """验证全系统仅放行 1进2 / 2进3 / 3进4 接力标的，严格剔除 0进1 与 4进5+"""
+        def _make_quote(status="普通", yb=0, is_lu=False):
+            return StockQuote(
+                code="600519", name="测试股", market="SH",
+                current_price=10.0, pre_close=9.09, open_price=9.5,
+                high_price=10.0, low_price=9.4, change_pct=10.0,
+                volume=1000000, amount=10000000, turnover_rate=3.0,
+                float_market_cap=50.0, total_market_cap=55.0,
+                yesterday_status=status, yesterday_boards=yb, is_limit_up=is_lu
+            )
+
+        self.assertTrue(self.filter.is_target_relay_quote(_make_quote(status="昨日首板")))
+        self.assertTrue(self.filter.is_target_relay_quote(_make_quote(status="昨日2连板")))
+        self.assertTrue(self.filter.is_target_relay_quote(_make_quote(status="昨日3连板")))
+        self.assertTrue(self.filter.is_target_relay_quote(_make_quote(yb=3, is_lu=True), today_boards=4))
+
+        self.assertFalse(self.filter.is_target_relay_quote(_make_quote(status="普通", yb=0)))
+        self.assertFalse(self.filter.is_target_relay_quote(_make_quote(status="昨日冲高回落", yb=0)))
+        self.assertFalse(self.filter.is_target_relay_quote(_make_quote(status="昨日4连板")))
+        self.assertFalse(self.filter.is_target_relay_quote(_make_quote(yb=4, is_lu=True), today_boards=5))
+        self.assertFalse(self.filter.is_target_relay_quote(_make_quote(yb=1, is_lu=True), today_boards=1))
+
 
 if __name__ == "__main__":
     unittest.main()

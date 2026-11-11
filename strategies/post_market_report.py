@@ -13,6 +13,7 @@ from models.stock_item import YesterdayLimitUpItem, PostMarketReportData
 from config import PostMarketReportConfig
 from data.open_data_provider import OpenDataProvider
 from utils.calendar import get_beijing_now
+from utils.filters import StockFilter
 
 
 class PostMarketReportScreener:
@@ -37,31 +38,42 @@ class PostMarketReportScreener:
         float_cap_yi = raw_data.get("float_cap_yi", 0.0)
         is_today_limit_up = raw_data.get("is_today_limit_up", False)
 
-        # 1. 计算连板数
+        # 1. 计算连板数与昨日连板基数（仅聚焦 1进2 / 2进3 / 3进4）
+        yesterday_boards = int(raw_data.get("yesterday_boards") or 0)
         consecutive_boards = raw_data.get("consecutive_boards")
         if consecutive_boards is None:
-            consecutive_boards = self.provider.get_consecutive_board_count(code, is_today_limit_up)
+            if yesterday_boards > 0:
+                consecutive_boards = yesterday_boards + 1 if is_today_limit_up else yesterday_boards
+            else:
+                consecutive_boards = self.provider.get_consecutive_board_count(code, is_today_limit_up)
+        else:
+            consecutive_boards = int(consecutive_boards)
+
+        if yesterday_boards <= 0:
+            yesterday_boards = (consecutive_boards - 1) if is_today_limit_up else consecutive_boards
+
+        relay_tag = StockFilter.format_relay_label(yesterday_boards) or f"{consecutive_boards}板"
 
         # 2. 诊断连板状态标签
         amplitude = high_pct - low_pct
         if is_today_limit_up:
             if amplitude < 0.2:
-                board_status = f"【{consecutive_boards}连板·一字死封】"
-            elif consecutive_boards >= 4:
-                board_status = f"【{consecutive_boards}连板·高标总龙头】"
+                board_status = f"【{consecutive_boards}连板·{relay_tag}一字死封】"
+            elif consecutive_boards == 4:
+                board_status = f"【4连板·3进4强势晋级】"
             elif consecutive_boards == 3:
-                board_status = f"【3连板·主线核心龙头】"
+                board_status = f"【3连板·2进3主线卡位】"
             else:
-                board_status = f"【2连板·换手晋级】"
+                board_status = f"【2连板·1进2换手晋级】"
         else:
             if close_pct >= 5.0:
-                board_status = "【断板强冲高·收高位】"
+                board_status = f"【{relay_tag}断板·收高位】"
             elif close_pct >= 0.0:
-                board_status = "【断板冲高回落·收红】"
+                board_status = f"【{relay_tag}断板·冲高回落】"
             elif close_pct >= -3.0:
-                board_status = "【断板微跌震荡】"
+                board_status = f"【{relay_tag}断板·微跌震荡】"
             else:
-                board_status = "【断板深水大面】"
+                board_status = f"【{relay_tag}断板·深水大面】"
 
         # 3. 生成次日打板操作建议与逻辑分析
         next_day_action, detail_reason = self._generate_advice(
@@ -71,7 +83,8 @@ class PostMarketReportScreener:
             high_pct=high_pct,
             low_pct=low_pct,
             turnover_rate=turnover_rate,
-            amplitude=amplitude
+            amplitude=amplitude,
+            yesterday_boards=yesterday_boards
         )
 
         return YesterdayLimitUpItem(
@@ -88,7 +101,8 @@ class PostMarketReportScreener:
             is_today_limit_up=is_today_limit_up,
             board_status=board_status,
             next_day_action=next_day_action,
-            detail_reason=detail_reason
+            detail_reason=detail_reason,
+            yesterday_boards=yesterday_boards
         )
 
     def _generate_advice(
@@ -99,74 +113,115 @@ class PostMarketReportScreener:
         high_pct: float,
         low_pct: float,
         turnover_rate: float,
-        amplitude: float
+        amplitude: float,
+        yesterday_boards: int = 1
     ) -> Tuple[str, str]:
         """
-        基于 A 股经典打板与接力纪律，输出次日打板预案
+        基于 A 股 1进2 / 2进3 / 3进4 连板纪律，输出次日打板预案
         """
+        relay_tag = StockFilter.format_relay_label(yesterday_boards) or f"{consecutive_boards}板"
         if is_today_limit_up:
-            # 缩量一字板
-            if amplitude < 0.2:
-                if consecutive_boards >= 3:
-                    action = "【高位一字加速·严禁排板/次日警惕天地板】"
-                    reason = f"已连续缩量一字顶至{consecutive_boards}板，筹码未换手，次日一旦分歧爆量开板极易引发主力抢跑，严禁打板接盘。"
+            # 3进4 已晋级 4连板 -> 次日为 4进5，超出系统接力梯队
+            if consecutive_boards >= 4:
+                action = "【3进4已兑现·次日超4板不再新开接力】"
+                reason = f"今日成功晋级{consecutive_boards}连板（3进4），明日进入4进5高危博弈区，超出系统1进2/2进3/3进4范围，持筹者可顺势止盈、次日不再打板。"
+            # 缩量一字板 (2板 / 3板)
+            elif amplitude < 0.2:
+                if consecutive_boards == 3:
+                    action = "【2进3一字加速·明日3进4严禁无量顶一字排单】"
+                    reason = "已连续一字顶至3板，筹码未充分换手，次日3进4一旦放量爆开易引发获利盘抢跑，需见充分换手回封方能谨慎观察。"
                 else:
-                    action = "【强势一字板·次日若开板放量换手回封可排板】"
-                    reason = "2板一字极度强势，次日若盘中开板给换手回踩机会，并在大买单回封瞬间可跟随排板。"
-            # 高位连板龙头 (>= 3板)
-            elif consecutive_boards >= 3:
-                action = "【空间板龙头·次日关注集合竞价弱转强打板】"
-                reason = f"主线标杆晋级{consecutive_boards}板，筹码换手良好。次日集合竞价若高开+2%~+5%且量能达标，可直接挂单打板。"
-            # 2连板 (1进2成功)
+                    action = "【1进2强势一字·次日2进3若开板放量回封可排板】"
+                    reason = "2板一字极度强势，次日若盘中开板给换手回踩机会，并在大买单回封瞬间可跟随做2进3接力。"
+            # 3连板 (2进3成功 -> 次日看 3进4)
+            elif consecutive_boards == 3:
+                action = "【2进3成功·次日重点观察3进4弱转强打板】"
+                reason = "主线标杆顺利晋级3连板（2进3），筹码换手良好。次日集合竞价若高开+2%~+5%且量能达标，可作为3进4核心观察。"
+            # 2连板 (1进2成功 -> 次日看 2进3)
             else:
                 if turnover_rate > 28.0:
-                    action = "【高换手二板·次日需大单高开确认才可打板】"
-                    reason = "今日换手率偏高，筹码分歧较重。次日早盘必须高开在+3%以上且快速冲板，才可打板上车做3板。"
+                    action = "【高换手二板·次日2进3需大单高开确认才可打板】"
+                    reason = "今日1进2换手率偏高，筹码分歧较重。次日早盘必须高开在+3%以上且快速冲板，才可打板上车做2进3。"
                 else:
                     action = "【强势二板·次日重点做2进3接力打板】"
-                    reason = "1进2成功确立身位，分时结构扎实，次日早盘集合竞价与开盘若承接有力，可作为主打标的参与打板。"
+                    reason = "1进2成功确立身位，分时结构扎实，次日早盘集合竞价与开盘若承接有力，可作为主打标的参与2进3接力。"
         else:
             # 断板但收高位 (> 5%)
             if close_pct >= 5.0 and turnover_rate <= 22.0:
-                action = "【断板企稳·次日重点低吸博反包首板】"
-                reason = "日内大单冲高后虽未封死，但收在全天高位且未破分时均线，主力未撤退，次日水下平开或-1%~-2%可低吸博反包首板。"
+                action = f"【{relay_tag}断板收强·已脱离连板梯队/不打连板】"
+                reason = f"日内冲击{relay_tag}虽未封死但收在全天高位，因已断板不再属于1进2/2进3/3进4连板接力范围，次日不再新开打板。"
             # 冲高回落 (0% ~ 5%)
             elif close_pct >= 0.0:
-                action = "【冲高回落断板·禁止打板/保持观望】"
-                reason = f"日内最高冲至+{high_pct:.1f}%后遭获利盘大幅抛压，收盘仅+{close_pct:.1f}%，上方套牢盘较重，次日惯性承压，禁止追高打板。"
+                action = f"【{relay_tag}冲高回落断板·禁止打板/观望】"
+                reason = f"日内冲击{relay_tag}最高冲至+{high_pct:.1f}%后遭抛压回落至+{close_pct:.1f}%，上方套牢盘较重，禁止追高。"
             # 大跌深水面 (< -3%)
             elif close_pct < -3.0:
-                action = "【高位核按钮·深水大面/坚决规避】"
-                reason = f"今日振幅达{amplitude:.1f}%，收大阴线杀跌，筹码结构严重破坏，次日大概率继续惯性补跌，坚决规避，严禁接飞刀。"
+                action = f"【{relay_tag}断板核按钮·深水大面/坚决规避】"
+                reason = f"今日振幅达{amplitude:.1f}%，收大阴线杀跌，筹码结构严重破坏，坚决规避，严禁接飞刀。"
             # 微跌震荡 (-3% ~ 0%)
             else:
-                action = "【缩量震荡断板·缺乏进攻性/不参与】"
-                reason = "断板后多空僵持，日内缺乏大资金主动做多信号，次日难以形成涨停合力，观望为主。"
+                action = f"【{relay_tag}缩量震荡断板·不参与】"
+                reason = "断板后多空僵持，日内缺乏大资金主动封板合力，观望为主。"
 
         return action, reason
 
     def run_report(self, raw_items: Optional[List[Dict[str, Any]]] = None) -> PostMarketReportData:
         """
-        生成全套盘后复盘报告数据
+        生成全套盘后复盘报告数据（严格仅梳理 1进2 / 2进3 / 3进4 梯队标的）
         """
         is_live = (raw_items is None)
         if raw_items is None:
             raw_items = self.provider.fetch_yesterday_limit_up_pool()
 
-        # 性能提速优化：仅在真实线上未指定测试数据时，批量从今日涨停池预取准确连板数
+        allowed_prev: Dict[str, int] = {}
+        today_zt_pool: Dict[str, Dict[str, Any]] = {}
         if is_live:
             try:
-                today_zt_pool = self.provider.fetch_today_zt_pool_details()
+                prev_zt = self.provider.fetch_prev_day_zt_boards() or {}
+                allowed_prev = {
+                    code: int(yb) for code, yb in prev_zt.items()
+                    if int(yb or 0) in StockFilter.ALLOWED_YESTERDAY_BOARDS
+                }
+            except Exception:
+                allowed_prev = {}
+            try:
+                today_zt_pool = self.provider.fetch_today_zt_pool_details() or {}
+            except Exception:
+                today_zt_pool = {}
+
+            if not allowed_prev:
+                raw_items = []
+            else:
+                filtered_raw = []
                 for raw in raw_items:
                     code = raw.get("code")
+                    if code not in allowed_prev:
+                        continue
+                    yb = allowed_prev[code]
+                    raw["yesterday_boards"] = yb
                     if code in today_zt_pool and raw.get("is_today_limit_up"):
-                        raw["consecutive_boards"] = int(today_zt_pool[code].get("continuous_boards", 2) or 2)
-            except Exception:
-                pass
+                        raw["consecutive_boards"] = int(today_zt_pool[code].get("continuous_boards", yb + 1) or (yb + 1))
+                    filtered_raw.append(raw)
+                raw_items = filtered_raw
 
         analyzed_items: List[YesterdayLimitUpItem] = []
         for raw in raw_items:
+            yb_raw = raw.get("yesterday_boards")
+            if yb_raw is not None and int(yb_raw) not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+                continue
+
+            cb_raw = raw.get("consecutive_boards")
+            if cb_raw is not None:
+                if raw.get("is_today_limit_up") and int(cb_raw) not in StockFilter.ALLOWED_TODAY_BOARDS:
+                    continue
+                if (not raw.get("is_today_limit_up")) and yb_raw is None and int(cb_raw) not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+                    continue
+
             item = self.analyze_item(raw)
+            if item.yesterday_boards not in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+                continue
+            if item.is_today_limit_up and item.consecutive_boards not in StockFilter.ALLOWED_TODAY_BOARDS:
+                continue
             analyzed_items.append(item)
 
         # 排序：连板股排前面（连板数从大到小，再按涨幅降序），断板股排后面（按涨幅降序）

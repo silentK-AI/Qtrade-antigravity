@@ -31,11 +31,18 @@ class ClosingStageScreener(BaseScreener):
         sentiment_multiplier: float = 1.0
     ) -> Tuple[float, float, str, Dict[str, Any], str]:
         """
-        计算个股尾盘打板评分
+        计算个股尾盘打板评分（严格仅梳理 1进2 / 2进3 / 3进4）
         返回: (综合总分, 资金因子专属得分, 形态战法, 核心因子字典, 次日预期)
         """
-        factors = {}
-        pattern = "常规尾盘异动"
+        yb = self.stock_filter.extract_yesterday_boards(quote)
+        if yb not in self.stock_filter.ALLOWED_YESTERDAY_BOARDS:
+            return 0.0, 0.0, "非1进2/2进3/3进4标的", {
+                "【梯队】连板过滤": "非昨日1/2/3板，系统已严格过滤"
+            }, "不符合 1进2/2进3/3进4 接力范围"
+
+        relay_label = self.stock_filter.format_relay_label(yb)
+        factors = {"【连板梯队】": f"{relay_label}（昨日{yb}板）"}
+        pattern = f"【{relay_label}】常规尾盘异动"
 
         # -----------------------------------------------------------------
         # 一、 均线一票否决检查
@@ -121,18 +128,18 @@ class ClosingStageScreener(BaseScreener):
         change = closing.current_change_pct
         if closing.is_rebound_limit or quote.is_limit_up:
             price_tech_score += 12.0
-            pattern = "【首板强回封】分歧换手龙"
-            factors["【战法】形态分类"] = "全天充分换手洗盘，尾盘坚决回封涨停"
-            expectation = "经历全天盘中分歧换手，浮筹已在盘中充分沉淀，尾盘主力坚决回封，次日开盘极高概率直接高开冲连板。"
+            pattern = f"【{relay_label}强回封】分歧换手龙"
+            factors["【战法】形态分类"] = f"昨日{yb}板，全天充分换手洗盘，尾盘坚决回封{relay_label}"
+            expectation = f"经历盘中分歧换手后尾盘主力坚决回封（{relay_label}），浮筹沉淀完毕，次日享连板溢价预期。"
         elif 4.0 <= change <= 8.5:
             price_tech_score += 11.0
-            pattern = "【蓄势待发】尾盘潜伏冲板"
-            factors["【战法】形态分类"] = f"日内涨幅 +{change:.2f}%，强势控盘蓄势"
-            expectation = "全天主力沿分时均线稳步推升，尾盘爆量抢筹且拒绝开板，预期次日早盘直接集合竞价高开抢筹冲涨停。"
+            pattern = f"【{relay_label}蓄势待发】尾盘潜伏冲板"
+            factors["【战法】形态分类"] = f"昨日{yb}板，日内涨幅 +{change:.2f}%，强势控盘蓄势冲击{relay_label}"
+            expectation = f"昨日{yb}板基础上主力沿分时均线稳步推升，尾盘放量抢筹冲击{relay_label}，预期尾盘冲板或次日高开弱转强。"
         else:
             price_tech_score += 5.0
-            pattern = "尾盘温和拉升"
-            expectation = "尾盘主力护盘良好，关注次日早盘量能接力表现。"
+            pattern = f"【{relay_label}】尾盘温和拉升"
+            expectation = f"昨日{yb}板标的尾盘主力护盘良好，关注尾盘能否冲击{relay_label}。"
 
         # -----------------------------------------------------------------
         # 四、 基础流动性与健康换手率 (满分 15 分，占比 15%)
@@ -158,25 +165,27 @@ class ClosingStageScreener(BaseScreener):
         signals = []
 
         for quote, closing in candidates:
-            if not self.stock_filter.filter_quote(quote):
+            if not self.stock_filter.filter_quote(quote) or not self.stock_filter.is_target_relay_quote(quote):
                 continue
 
+            yb = self.stock_filter.extract_yesterday_boards(quote)
+            relay_label = self.stock_filter.format_relay_label(yb)
             score, cap_score, pattern, factors, expectation = self.calculate_closing_score(
                 quote, closing, sentiment_multiplier
             )
 
             if score >= self.config.SCORE_THRESHOLD:
-                if "首板强回封" in pattern:
-                    action = "14:52前挂涨停价排单买入 / 尾盘集合竞价市价买入"
+                if "强回封" in pattern:
+                    action = f"14:52前挂涨停价排单买入 / 尾盘集合竞价市价买入({relay_label})"
                 else:
-                    action = "14:50 - 14:55分批市价潜伏买入，锁定次日早盘冲高利润"
+                    action = f"14:50 - 14:55分批市价潜伏介入，博弈{relay_label}冲板或次日弱转强"
 
                 stop_loss = self.calculate_stop_loss(closing.current_price, risk_tolerance_pct=3.0)
 
                 signal = StrategySignal(
                     code=quote.code,
                     name=quote.name,
-                    strategy_type="尾盘抢筹打板",
+                    strategy_type=f"尾盘抢筹接力({relay_label})",
                     score=score,
                     capital_score=cap_score,
                     current_price=closing.current_price,

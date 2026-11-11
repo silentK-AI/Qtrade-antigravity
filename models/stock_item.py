@@ -36,6 +36,7 @@ class StockQuote:
     sell1_price: float = 0.0       # 卖一挂单价
     sell1_volume: float = 0.0      # 卖一挂单量（股）
     net_large_inflow: float = 0.0  # 主力大单净买入额（元）
+    yesterday_boards: int = 0      # 昨日真实连板高度 (系统仅梳理 1=1进2, 2=2进3, 3=3进4)
 
 
 @dataclass
@@ -137,6 +138,7 @@ class YesterdayLimitUpItem:
     board_status: str              # 连板状态备注 (如 "【3连板·主线龙头】"、"【断板冲高回落】")
     next_day_action: str           # 第二天是否打板建议 (如 "【强势连板·次日可打板】"、"【禁止接盘·观望】")
     detail_reason: str             # 逻辑分析与操作要点
+    yesterday_boards: int = 0      # 昨日真实连板数 (1, 2, 3)
 
 
 @dataclass

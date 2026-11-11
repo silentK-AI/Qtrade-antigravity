@@ -50,10 +50,16 @@ class Closing1458Screener(BaseScreener):
         sentiment_multiplier: float = 1.0
     ) -> Tuple[float, float, str, Dict[str, Any], str, str]:
         """
-        计算 14:58 尾盘竞价打分
+        计算 14:58 尾盘竞价打分（严格仅梳理 1进2 / 2进3 / 3进4）
         返回: (综合分, 资金分, 战法, 因子字典, 建议操作, 次日预期)
         """
-        factors = {}
+        yb = self.stock_filter.extract_yesterday_boards(quote)
+        today_b = int(snap.continuous_board_count or 0) if snap.is_limit_up else None
+        if not self.stock_filter.is_target_relay_quote(quote, today_boards=today_b):
+            return 0.0, 0.0, "非1进2/2进3/3进4标的", {"【连板梯队】": "系统仅梳理1进2/2进3/3进4，已过滤"}, "观望", "非目标梯队"
+
+        relay_label = self.stock_filter.format_relay_label(yb)
+        factors = {"【连板梯队】": f"{relay_label}（昨日{yb}板）"}
         seal_wan = snap.closing_seal_amount / 10000.0
         seal_ratio = snap.seal_to_float_ratio
         first_time = snap.first_seal_time
@@ -283,9 +289,12 @@ class Closing1458Screener(BaseScreener):
         signals = []
 
         for quote, snap in candidates:
-            if not self.stock_filter.filter_quote(quote):
+            today_b = int(snap.continuous_board_count or 0) if snap.is_limit_up else None
+            if not self.stock_filter.filter_quote(quote) or not self.stock_filter.is_target_relay_quote(quote, today_boards=today_b):
                 continue
 
+            yb = self.stock_filter.extract_yesterday_boards(quote)
+            relay_label = self.stock_filter.format_relay_label(yb)
             score, cap_score, pattern, factors, action, expectation = self.calculate_1458_score(
                 quote, snap, sentiment_multiplier
             )
@@ -296,7 +305,7 @@ class Closing1458Screener(BaseScreener):
                 signal = StrategySignal(
                     code=quote.code,
                     name=quote.name,
-                    strategy_type="14:58尾盘实战选股",
+                    strategy_type=f"14:58尾盘实战选股({relay_label})",
                     score=score,
                     capital_score=cap_score,
                     current_price=snap.indicative_price,

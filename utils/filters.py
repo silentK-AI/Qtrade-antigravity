@@ -7,16 +7,72 @@
 4. 过滤极小盘流动性陷阱与超大盘迟钝股
 """
 
+import re
 from typing import Optional
 from config import MainBoardFilterConfig
 from models.stock_item import StockQuote
 
 
 class StockFilter:
-    """股票主板及风控过滤器"""
+    """股票主板及风控过滤器（全系统仅梳理 1进2、2进3、3进4 连板梯队标的）"""
+
+    ALLOWED_YESTERDAY_BOARDS = (1, 2, 3)
+    ALLOWED_TODAY_BOARDS = (2, 3, 4)
 
     def __init__(self, config: Optional[MainBoardFilterConfig] = None):
         self.config = config or MainBoardFilterConfig()
+
+    @staticmethod
+    def format_relay_label(yesterday_boards: int) -> str:
+        """格式化接力梯队标签（如 1进2 / 2进3 / 3进4）"""
+        if yesterday_boards in StockFilter.ALLOWED_YESTERDAY_BOARDS:
+            return f"{yesterday_boards}进{yesterday_boards + 1}"
+        return ""
+
+    @staticmethod
+    def format_yesterday_status(yesterday_boards: int) -> str:
+        """格式化昨日连板状态描述"""
+        if yesterday_boards == 1:
+            return "昨日首板"
+        if yesterday_boards >= 2:
+            return f"昨日{yesterday_boards}连板"
+        return "普通"
+
+    @staticmethod
+    def extract_yesterday_boards(quote: StockQuote) -> int:
+        """提取标的昨日真实连板数（0 表示昨日未涨停，不进入 1进2/2进3/3进4 池）"""
+        yb = int(getattr(quote, "yesterday_boards", 0) or 0)
+        if yb > 0:
+            return yb
+
+        status = str(getattr(quote, "yesterday_status", "") or "").strip()
+        if not status:
+            return 0
+
+        for pattern in (r'(\d+)\s*进\s*\d+', r'昨日?\s*(\d+)\s*连?板', r'(\d+)\s*连?板'):
+            m = re.search(pattern, status)
+            if m:
+                return int(m.group(1))
+
+        if "首板" in status and "非首板" not in status:
+            return 1
+
+        return 0
+
+    def is_target_relay_quote(self, quote: StockQuote, today_boards: Optional[int] = None) -> bool:
+        """严格校验是否为系统允许的 1进2、2进3、3进4 接力标的"""
+        yb = self.extract_yesterday_boards(quote)
+        if yb not in self.ALLOWED_YESTERDAY_BOARDS:
+            return False
+
+        if today_boards is not None and int(today_boards) > 0:
+            tb = int(today_boards)
+            if tb not in self.ALLOWED_TODAY_BOARDS:
+                return False
+            if getattr(quote, "is_limit_up", False) and tb != yb + 1:
+                return False
+
+        return True
 
     def is_main_board_code(self, code: str) -> bool:
         """

@@ -101,14 +101,14 @@ class LimitUpModule:
         signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
-            title = "🔔【09:23 早盘抢筹锁板精选】(全天封死+次日涨停)"
+            title = "🔔【09:23 早盘锁板精选·1进2/2进3/3进4】"
             self.pusher.push(signals, title, sentiment)
 
         return signals
 
     def run_0925(self, push: bool = True) -> List[StrategySignal]:
         """
-        【09:25:05 关键时钟】早盘开盘竞价打板精选
+        【09:25:05 关键时钟】早盘开盘竞价接力（1进2 / 2进3 / 3进4）
         """
         screener = MorningAuctionScreener()
         dataset, sentiment = self._get_dataset_and_sentiment("0925")
@@ -116,14 +116,14 @@ class LimitUpModule:
         signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
-            title = "🚀【09:25 开盘竞价打板精选】"
+            title = "🚀【09:25 开盘竞价接力·1进2/2进3/3进4】"
             self.pusher.push(signals, title, sentiment)
 
         return signals
 
     def run_1450(self, push: bool = True) -> List[StrategySignal]:
         """
-        【14:50:00 关键时钟】尾盘异动放量蓄势冲板精选
+        【14:50:00 关键时钟】尾盘异动放量蓄势接力（1进2 / 2进3 / 3进4）
         """
         screener = ClosingStageScreener()
         dataset, sentiment = self._get_dataset_and_sentiment("1450")
@@ -131,14 +131,14 @@ class LimitUpModule:
         signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
-            title = "📊【14:50 尾盘蓄势冲板精选】"
+            title = "📊【14:50 尾盘蓄势接力·1进2/2进3/3进4】"
             self.pusher.push(signals, title, sentiment)
 
         return signals
 
     def run_1458(self, push: bool = True) -> List[StrategySignal]:
         """
-        【14:58:00 关键时钟】尾盘集合竞价锁定（次日大概率涨停，区分可买入与锁仓标的）
+        【14:58:00 关键时钟】尾盘集合竞价锁定（1进2 / 2进3 / 3进4）
         """
         screener = Closing1458Screener()
         dataset, sentiment = self._get_dataset_and_sentiment("1458")
@@ -146,7 +146,7 @@ class LimitUpModule:
         signals = screener.run_strategy(dataset, sentiment_multiplier=multiplier)
 
         if push and self.config.PUSHPLUS_TOKEN:
-            title = "🎯【14:58 尾盘竞价锁定】(锁定次日大概率涨停)"
+            title = "🎯【14:58 尾盘竞价锁定·1进2/2进3/3进4】"
             self.pusher.push(signals, title, sentiment)
 
         return signals

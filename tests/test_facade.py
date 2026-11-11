@@ -9,7 +9,7 @@ from limit_up_module import LimitUpModule
 class TestLimitUpFacade(unittest.TestCase):
 
     def setUp(self):
-        self.module = LimitUpModule(pushplus_token="mock_test_token")
+        self.module = LimitUpModule(pushplus_token="mock_test_token", source="mock")
 
     def test_module_methods(self):
         # 测试 09:23 门面调用

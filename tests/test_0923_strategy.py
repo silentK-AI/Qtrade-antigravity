@@ -66,21 +66,57 @@ class TestAuction0923Strategy(unittest.TestCase):
             buy1_price=4.40, buy1_volume=10000000.0, sell1_price=0.0, sell1_volume=0.0
         )
         scheduler.snapshot_0919 = {"002160": {"buy1_volume": 9500000.0, "volume": 0.0, "price": 4.40}}
+        rq_4board = StockQuote(
+            code="600999", name="高标四板", market="SH",
+            current_price=22.00, pre_close=20.00, open_price=22.00,
+            high_price=22.00, low_price=22.00, change_pct=10.0,
+            volume=100000.0, amount=2200000.0, turnover_rate=1.0,
+            float_market_cap=50.0, total_market_cap=55.0,
+            buy1_price=22.00, buy1_volume=10000000.0, sell1_price=0.0, sell1_volume=0.0
+        )
         with patch.object(scheduler.data_provider, "fetch_main_board_top_active", return_value=[]), \
-             patch.object(scheduler.data_provider, "fetch_yesterday_limit_up_pool", return_value=[{"code": "002160", "name": "常铝股份"}]), \
-             patch.object(scheduler.data_provider, "fetch_realtime_quotes", return_value=[rq_preopen]):
+             patch.object(scheduler.data_provider, "fetch_prev_day_zt_boards", return_value={"002160": 1, "600999": 4}), \
+             patch.object(scheduler.data_provider, "fetch_realtime_quotes", return_value=[rq_preopen, rq_4board]):
             cands = scheduler._get_0923_candidates()
 
-        self.assertEqual(len(cands), 1)
+        self.assertEqual(len(cands), 1, "仅保留昨日1/2/3板，昨日4板(4进5)必须过滤")
         q_out, snap_out = cands[0]
         self.assertAlmostEqual(snap_out.indicative_change_pct, 10.0, places=1)
         self.assertTrue(snap_out.is_sealed_limit)
         self.assertEqual(q_out.yesterday_status, "昨日首板")
+        self.assertEqual(q_out.yesterday_boards, 1)
 
         signals = self.screener.run_strategy(cands, sentiment_multiplier=1.0)
         self.assertEqual(len(signals), 1)
         self.assertEqual(signals[0].code, "002160")
         self.assertGreaterEqual(signals[0].score, 80.0)
+
+    def test_0923_rejects_first_board_and_high_board(self):
+        """验证 09:23 严格拒绝 0进1 首板与 4进5 高标，仅接纳 1进2/2进3/3进4"""
+        def _make_item(code, yb, status):
+            q = StockQuote(
+                code=code, name=f"测试{code}", market="SH",
+                current_price=11.0, pre_close=10.0, open_price=11.0,
+                high_price=11.0, low_price=11.0, change_pct=10.0,
+                volume=3000000, amount=33000000, turnover_rate=2.0,
+                float_market_cap=45.0, total_market_cap=48.0,
+                yesterday_status=status, yesterday_boards=yb
+            )
+            s = Snapshot0923(
+                code=code, indicative_price=11.0, indicative_change_pct=10.0,
+                real_seal_amount=90000000.0, real_seal_to_float_ratio=6.5,
+                spoof_withdrawn_ratio=0.01, is_sealed_limit=True,
+                volume_920_923=2000000.0, is_upward_rush=True
+            )
+            return (q, s)
+
+        cands = [
+            _make_item("600010", 0, "普通"),       # 0进1 -> 排除
+            _make_item("600011", 3, "昨日3连板"),  # 3进4 -> 入选
+            _make_item("600012", 4, "昨日4连板"),  # 4进5 -> 排除
+        ]
+        codes = [sig.code for sig in self.screener.run_strategy(cands, sentiment_multiplier=1.0)]
+        self.assertEqual(codes, ["600011"])
 
 
 if __name__ == "__main__":
