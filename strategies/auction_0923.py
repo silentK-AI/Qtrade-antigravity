@@ -70,10 +70,13 @@ class Auction0923Screener(BaseScreener):
             factors["【资金】不可撤单加码"] = "价格平稳未出现剧烈加码"
         capital_score += score_rush
 
-        # 3. 9:20-9:23 真实成交换手承接 (满分 14 分)
+        # 3. 9:20-9:23 真实成交换手承接 / 竞价锁筹排队强度 (满分 14 分)
         if snap.volume_920_923 > 0:
             score_vol = 14.0
             factors["【资金】不可撤阶段成交"] = "多空在不可撤单区间真金白银巨额撮合，多头完全压制"
+        elif snap.is_sealed_limit and seal_wan >= self.config.MIN_REAL_SEAL_AMOUNT:
+            score_vol = 14.0
+            factors["【资金】不可撤阶段排队"] = f"开盘前未撮合阶段买一顶格排队 {seal_wan:.0f} 万元，不可撤单锁筹坚决"
         else:
             score_vol = 8.0
             factors["【资金】不可撤阶段成交"] = "成交量温和"
@@ -155,5 +158,5 @@ class Auction0923Screener(BaseScreener):
                 )
                 signals.append(signal)
 
-        signals.sort(key=lambda s: s.score, reverse=True)
-        return signals
+        signals.sort(key=lambda s: (s.score, s.capital_score), reverse=True)
+        return signals[:5]

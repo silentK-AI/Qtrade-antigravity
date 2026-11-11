@@ -52,12 +52,48 @@ class ServerDaemonScheduler:
         """判断是否为真实 A 股交易日 (排除周末及元旦/春节/清明/五一/端午/中秋/国庆法定休市)"""
         return TradeCalendar.is_trading_day(dt)
 
+    def _resolve_auction_quote(self, rq: StockQuote, clist_quote: Optional[StockQuote] = None) -> StockQuote:
+        """在 09:15-09:25 集合竞价未撮合阶段，修正腾讯现价/涨跌幅仍为昨收或0的问题，还原真实拟撮合价"""
+        if rq.volume == 0.0:
+            ind_price = 0.0
+            if clist_quote and clist_quote.current_price > 0 and abs(clist_quote.change_pct) >= 0.01:
+                ind_price = clist_quote.current_price
+            elif rq.current_price > 0 and (abs(rq.change_pct) >= 0.01 or rq.current_price != rq.pre_close):
+                ind_price = rq.current_price
+            elif rq.buy1_price > 0:
+                ind_price = rq.buy1_price
+
+            if ind_price > 0:
+                rq.current_price = ind_price
+                if rq.pre_close > 0:
+                    rq.change_pct = round((ind_price - rq.pre_close) / rq.pre_close * 100.0, 2)
+                    limit_up_price = round(rq.pre_close * 1.10, 2)
+                    rq.is_limit_up = (ind_price >= limit_up_price - 0.01)
+        return rq
+
     def _capture_0919_snapshot(self):
-        """09:19:50 锚定抓取集合竞价可撤单峰值（用于9:23判定虚假撤单）"""
+        """09:19:50 锚定抓取集合竞价可撤单峰值（记录买一挂单量与拟撮合价，用于9:23判定虚假撤单）"""
         print("[09:19:50] 正在锚定集合竞价可撤单峰值盘口快照...")
         try:
-            quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
-            self.snapshot_0919 = {q.code: {"quote": q, "volume": q.volume, "amount": q.amount, "price": q.current_price} for q in quotes}
+            active_quotes = self.data_provider.fetch_main_board_top_active(page_size=200)
+            yest_pool = self.data_provider.fetch_yesterday_limit_up_pool()
+            clist_map = {q.code: q for q in active_quotes}
+            candidate_codes = list(dict.fromkeys(
+                [q.code for q in active_quotes if q.change_pct >= 2.0][:80] +
+                [item["code"] for item in yest_pool]
+            ))
+            real_quotes = self.data_provider.fetch_realtime_quotes(candidate_codes) if candidate_codes else []
+            snapshot: Dict[str, Any] = {}
+            for rq in real_quotes:
+                self._resolve_auction_quote(rq, clist_map.get(rq.code))
+                snapshot[rq.code] = {
+                    "quote": rq,
+                    "volume": rq.volume,
+                    "buy1_volume": rq.buy1_volume,
+                    "amount": rq.amount,
+                    "price": rq.current_price,
+                }
+            self.snapshot_0919 = snapshot
             print(f"[09:19:50] 集合竞价峰值快照已锁定，共锁定 {len(self.snapshot_0919)} 只活跃标的！")
         except Exception as e:
             print(f"[09:19:50] 快照采集跳过: {e}")
@@ -75,44 +111,69 @@ class ServerDaemonScheduler:
     def _get_0923_candidates(self) -> List[Tuple[StockQuote, Snapshot0923]]:
         if self.source == "live":
             try:
-                quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
-                if quotes:
-                    gap_quotes = [q for q in quotes if (4.0 <= q.change_pct <= 10.5)]
-                    # 抓取腾讯真实五档深度盘口 (获取买一挂单量与买一金额)
-                    codes = [q.code for q in gap_quotes[:40]]
-                    real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
-                    candidates = []
-                    for q in gap_quotes:
-                        rq = real_quotes.get(q.code, q)
-                        # 计算 09:19:50 到 09:23:05 的撤单率
-                        prev_data = self.snapshot_0919.get(rq.code, {})
-                        prev_vol = prev_data.get("volume", rq.volume)
-                        if prev_vol > rq.volume and prev_vol > 0:
-                            spoof_ratio = (prev_vol - rq.volume) / prev_vol
-                        else:
-                            spoof_ratio = 0.0
+                quotes = self.data_provider.fetch_main_board_top_active(page_size=200) or []
+                yest_pool = self.data_provider.fetch_yesterday_limit_up_pool()
+                yest_map = {item["code"]: item for item in yest_pool}
+                clist_map = {q.code: q for q in quotes}
 
-                        is_rush = rq.current_price >= prev_data.get("price", rq.current_price)
-                        real_seal = (rq.buy1_price * rq.buy1_volume) if rq.buy1_volume > 0 else 0.0
-                        float_cap = rq.float_market_cap * 100000000.0 if rq.float_market_cap > 0 else 0.0
-                        seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 0.0
+                # 合并榜首高开股 + 昨日涨停连板池 + 09:19竞价快照池，防集合竞价阶段榜单遗漏
+                all_codes = list(dict.fromkeys(
+                    [q.code for q in quotes if q.change_pct >= 2.5] +
+                    list(yest_map.keys()) +
+                    list(self.snapshot_0919.keys())
+                ))
+                if not all_codes:
+                    return []
 
-                        vol_0919 = prev_data.get("volume", 0.0)
-                        vol_920_923 = max(0.0, rq.volume - vol_0919) if vol_0919 > 0 else rq.volume
+                real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(all_codes)}
+                candidates = []
+                for code in all_codes:
+                    rq = real_quotes.get(code) or clist_map.get(code)
+                    if not rq or not self.data_provider.filter.filter_quote(rq):
+                        continue
 
-                        snap = Snapshot0923(
-                            code=rq.code,
-                            indicative_price=rq.current_price,
-                            indicative_change_pct=rq.change_pct,
-                            real_seal_amount=real_seal,
-                            real_seal_to_float_ratio=seal_ratio,
-                            spoof_withdrawn_ratio=spoof_ratio,
-                            is_sealed_limit=(rq.change_pct >= 9.8 and rq.buy1_volume > 0),
-                            volume_920_923=vol_920_923,
-                            is_upward_rush=is_rush
-                        )
-                        candidates.append((rq, snap))
-                    return candidates
+                    self._resolve_auction_quote(rq, clist_map.get(code))
+                    if not (4.0 <= rq.change_pct <= 10.5):
+                        continue
+
+                    if code in yest_map and "首板" not in rq.yesterday_status:
+                        rq.yesterday_status = "昨日首板"
+
+                    # 计算 09:19:50 到 09:23:05 的买一挂单撤单率（兼容成交量为0的集合竞价阶段）
+                    prev_data = self.snapshot_0919.get(rq.code, {})
+                    prev_buy1 = float(prev_data.get("buy1_volume", 0.0) or 0.0)
+                    prev_vol = float(prev_data.get("volume", rq.volume) or 0.0)
+                    if prev_buy1 > rq.buy1_volume and prev_buy1 > 0:
+                        spoof_ratio = (prev_buy1 - rq.buy1_volume) / prev_buy1
+                    elif prev_vol > rq.volume and prev_vol > 0:
+                        spoof_ratio = (prev_vol - rq.volume) / prev_vol
+                    else:
+                        spoof_ratio = 0.0
+
+                    is_rush = rq.current_price >= float(prev_data.get("price", rq.current_price) or rq.current_price)
+                    buy_px = rq.buy1_price if rq.buy1_price > 0 else rq.current_price
+                    real_seal = (buy_px * rq.buy1_volume) if (rq.buy1_volume > 0 and buy_px > 0) else 0.0
+                    float_cap = rq.float_market_cap * 100000000.0 if rq.float_market_cap > 0 else 0.0
+                    seal_ratio = (real_seal / float_cap * 1000.0) if float_cap > 0 else 0.0
+
+                    vol_0919 = float(prev_data.get("volume", 0.0) or 0.0)
+                    vol_920_923 = max(0.0, rq.volume - vol_0919) if vol_0919 > 0 else rq.volume
+                    limit_up_px = round(rq.pre_close * 1.10, 2) if rq.pre_close > 0 else 0.0
+                    is_sealed = (rq.change_pct >= 9.8 and rq.buy1_volume > 0 and (rq.sell1_volume == 0 or (limit_up_px > 0 and buy_px >= limit_up_px - 0.01)))
+
+                    snap = Snapshot0923(
+                        code=rq.code,
+                        indicative_price=rq.current_price,
+                        indicative_change_pct=rq.change_pct,
+                        real_seal_amount=real_seal,
+                        real_seal_to_float_ratio=seal_ratio,
+                        spoof_withdrawn_ratio=spoof_ratio,
+                        is_sealed_limit=is_sealed,
+                        volume_920_923=vol_920_923,
+                        is_upward_rush=is_rush
+                    )
+                    candidates.append((rq, snap))
+                return candidates
             except Exception as e:
                 logger.error(f"09:23 实时接口获取异常: {e}", exc_info=True)
             return []
@@ -122,23 +183,28 @@ class ServerDaemonScheduler:
         """获取 09:25 开盘集合竞价候选标的（打板与首板/1进2）"""
         if self.source == "live":
             try:
-                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=120)
-                if not active_quotes:
+                active_quotes = self.data_provider.fetch_main_board_top_active(page_size=300)
+                yesterday_zt = {item["code"]: item for item in self.data_provider.fetch_yesterday_limit_up_pool()}
+                if not active_quotes and not yesterday_zt:
                     return []
                 gap_quotes = [q for q in active_quotes if 1.5 <= q.change_pct <= 9.9]
-                if not gap_quotes:
+                codes = list(dict.fromkeys([q.code for q in gap_quotes[:60]] + list(yesterday_zt.keys())))
+                if not codes:
                     return []
-                codes = [q.code for q in gap_quotes[:40]]
                 real_quotes = {rq.code: rq for rq in self.data_provider.fetch_realtime_quotes(codes)}
-                yesterday_zt = {item["code"]: item for item in self.data_provider.fetch_yesterday_limit_up_pool()}
                 prev_day_vols = self.data_provider.fetch_prev_day_volumes(codes)
 
+                clist_map = {q.code: q for q in active_quotes}
                 candidates = []
-                for q in gap_quotes:
-                    rq = real_quotes.get(q.code, q)
+                for code in codes:
+                    rq = real_quotes.get(code) or clist_map.get(code)
+                    if not rq or not self.data_provider.filter.filter_quote(rq):
+                        continue
                     open_p = rq.open_price if rq.open_price > 0 else rq.current_price
                     gap_pct = ((open_p - rq.pre_close) / rq.pre_close * 100.0) if rq.pre_close > 0 else rq.change_pct
-                    if q.code in yesterday_zt:
+                    if not (1.5 <= gap_pct <= 9.95):
+                        continue
+                    if code in yesterday_zt:
                         rq.yesterday_status = "昨日首板"
 
                     unmatched_vol = rq.buy1_volume

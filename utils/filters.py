@@ -48,9 +48,9 @@ class StockFilter:
             
         clean_name = name.strip().upper()
         
-        # 过滤 ST 系列
+        # 过滤 ST 系列、退市及 PT 警示股
         if self.config.FILTER_ST:
-            if "ST" in clean_name or "*ST" in clean_name or "退" in clean_name:
+            if "ST" in clean_name or "*ST" in clean_name or "退" in clean_name or clean_name.startswith("PT"):
                 return False
                 
         # 过滤次新无涨跌幅或特殊标示

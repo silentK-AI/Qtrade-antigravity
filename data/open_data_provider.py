@@ -17,6 +17,21 @@ from utils.logger import get_logger
 logger = get_logger("open_data_provider")
 
 
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """安全将接口返回值转换为 float，兼容东财 '-' / None / 空字符串"""
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s or s == "-" or s.lower() == "nan":
+        return default
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return default
+
+
 class OpenDataProvider:
     """开源实时行情获取器"""
 
@@ -98,30 +113,30 @@ class OpenDataProvider:
             try:
                 name = parts[1]
                 code = parts[2]
-                curr_price = float(parts[3])
-                pre_close = float(parts[4])
-                open_price = float(parts[5])
-                volume = float(parts[6]) * 100  # 手转股
-                amount = float(parts[37]) * 10000 if len(parts) > 37 and parts[37] else 0.0 # 万元
-                turnover_rate = float(parts[38]) if len(parts) > 38 and parts[38] else 0.0
-                change_pct = float(parts[32]) if len(parts) > 32 and parts[32] else ((curr_price - pre_close) / pre_close * 100 if pre_close else 0.0)
-                high = float(parts[33]) if len(parts) > 33 and parts[33] else curr_price
-                low = float(parts[34]) if len(parts) > 34 and parts[34] else curr_price
-                float_market_cap = float(parts[44]) if len(parts) > 44 and parts[44] else 0.0
-                total_market_cap = float(parts[45]) if len(parts) > 45 and parts[45] else 0.0
+                curr_price = _safe_float(parts[3])
+                pre_close = _safe_float(parts[4])
+                open_price = _safe_float(parts[5])
+                volume = _safe_float(parts[6]) * 100  # 手转股
+                amount = _safe_float(parts[37]) * 10000 if len(parts) > 37 else 0.0 # 万元
+                turnover_rate = _safe_float(parts[38]) if len(parts) > 38 else 0.0
+                change_pct = _safe_float(parts[32]) if len(parts) > 32 and parts[32] else ((curr_price - pre_close) / pre_close * 100 if pre_close else 0.0)
+                high = _safe_float(parts[33], curr_price) if len(parts) > 33 and parts[33] else curr_price
+                low = _safe_float(parts[34], curr_price) if len(parts) > 34 and parts[34] else curr_price
+                float_market_cap = _safe_float(parts[44]) if len(parts) > 44 else 0.0
+                total_market_cap = _safe_float(parts[45]) if len(parts) > 45 else 0.0
                 
                 # 真实买一/卖一五档盘口深度 (手转股)
-                buy1_price = float(parts[9]) if len(parts) > 9 and parts[9] else 0.0
-                buy1_volume = float(parts[10]) * 100 if len(parts) > 10 and parts[10] else 0.0
-                sell1_price = float(parts[19]) if len(parts) > 19 and parts[19] else 0.0
-                sell1_volume = float(parts[20]) * 100 if len(parts) > 20 and parts[20] else 0.0
+                buy1_price = _safe_float(parts[9]) if len(parts) > 9 else 0.0
+                buy1_volume = _safe_float(parts[10]) * 100 if len(parts) > 10 else 0.0
+                sell1_price = _safe_float(parts[19]) if len(parts) > 19 else 0.0
+                sell1_volume = _safe_float(parts[20]) * 100 if len(parts) > 20 else 0.0
 
                 market = "SH" if code.startswith("6") else "SZ"
                 vwap = (amount / volume) if volume > 0 else curr_price
 
                 # 判断主板涨停（主板10%）
                 limit_up_price = round(pre_close * 1.10, 2)
-                is_limit_up = (curr_price >= limit_up_price - 0.01)
+                is_limit_up = (curr_price >= limit_up_price - 0.01) if (curr_price > 0 and pre_close > 0) else False
 
                 quote = StockQuote(
                     code=code,
@@ -154,61 +169,79 @@ class OpenDataProvider:
     def fetch_main_board_top_active(self, page_size: int = 100) -> List[StockQuote]:
         """
         从公开榜单接口抓取主板当下最活跃/涨幅居前的股票池
+        支持按东财每页100条上限自动分页抓取，并容错处理集合竞价阶段 '-' 空值
         """
         # 东财官方纯沪深主板榜单 (m:0+t:6 为深市主板; m:1+t:2 为沪市主板，精准排除创业板与科创板)
         # 增加 f62 字段获取真实实时主力资金净买入额 (元)
-        pz = min(500, max(page_size, 200))
-        url = (
-            "https://push2.eastmoney.com/api/qt/clist/get?"
-            f"pn=1&pz={pz}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
-            "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:1+t:2"
-            "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62"
-        )
-        try:
-            content = self._get_url_content(url)
-            data = json.loads(content)
-            diff = data.get("data", {}).get("diff", [])
-            quotes = []
-            for item in diff:
-                code = str(item.get("f12", ""))
-                name = str(item.get("f14", ""))
-                curr = float(item.get("f2", 0.0) or 0.0)
-                change_pct = float(item.get("f3", 0.0) or 0.0)
-                volume = float(item.get("f5", 0.0) or 0.0) * 100
-                amount = float(item.get("f6", 0.0) or 0.0)
-                turnover = float(item.get("f8", 0.0) or 0.0)
-                high = float(item.get("f15", 0.0) or curr)
-                low = float(item.get("f16", 0.0) or curr)
-                open_p = float(item.get("f17", 0.0) or curr)
-                pre_close = float(item.get("f18", 0.0) or curr)
-                total_cap = float(item.get("f20", 0.0) or 0.0) / 100000000
-                float_cap = float(item.get("f21", 0.0) or 0.0) / 100000000
-                net_inflow = float(item.get("f62", 0.0) or 0.0)
+        quotes: List[StockQuote] = []
+        seen_codes = set()
+        max_pages = min(6, max(1, (page_size + 99) // 100))
 
-                quote = StockQuote(
-                    code=code,
-                    name=name,
-                    market="SH" if code.startswith("6") else "SZ",
-                    current_price=curr,
-                    pre_close=pre_close,
-                    open_price=open_p,
-                    high_price=high,
-                    low_price=low,
-                    change_pct=change_pct,
-                    volume=volume,
-                    amount=amount,
-                    turnover_rate=turnover,
-                    float_market_cap=float_cap,
-                    total_market_cap=total_cap,
-                    vwap=(amount / volume) if volume > 0 else curr,
-                    is_limit_up=(change_pct >= 9.9),
-                    net_large_inflow=net_inflow
-                )
-                if self.filter.filter_quote(quote):
-                    quotes.append(quote)
-            return quotes
-        except Exception:
-            return []
+        for pn in range(1, max_pages + 1):
+            url = (
+                "https://push2.eastmoney.com/api/qt/clist/get?"
+                f"pn={pn}&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+                "&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:1+t:2"
+                "&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62"
+            )
+            try:
+                content = self._get_url_content(url)
+                data = json.loads(content)
+                diff = (data.get("data") or {}).get("diff") or []
+                if not diff:
+                    break
+                for item in diff:
+                    try:
+                        code = str(item.get("f12", "")).strip()
+                        name = str(item.get("f14", "")).strip()
+                        if not code or code in seen_codes:
+                            continue
+                        curr = _safe_float(item.get("f2"))
+                        if curr <= 0:
+                            continue
+                        change_pct = _safe_float(item.get("f3"))
+                        pre_close = _safe_float(item.get("f18"), curr)
+                        volume = _safe_float(item.get("f5")) * 100
+                        amount = _safe_float(item.get("f6"))
+                        turnover = _safe_float(item.get("f8"))
+                        high = _safe_float(item.get("f15"), curr)
+                        low = _safe_float(item.get("f16"), curr)
+                        open_p = _safe_float(item.get("f17"), curr)
+                        total_cap = _safe_float(item.get("f20")) / 100000000
+                        float_cap = _safe_float(item.get("f21")) / 100000000
+                        net_inflow = _safe_float(item.get("f62"))
+
+                        quote = StockQuote(
+                            code=code,
+                            name=name,
+                            market="SH" if code.startswith("6") else "SZ",
+                            current_price=curr,
+                            pre_close=pre_close,
+                            open_price=open_p,
+                            high_price=high,
+                            low_price=low,
+                            change_pct=change_pct,
+                            volume=volume,
+                            amount=amount,
+                            turnover_rate=turnover,
+                            float_market_cap=float_cap,
+                            total_market_cap=total_cap,
+                            vwap=(amount / volume) if volume > 0 else curr,
+                            is_limit_up=(change_pct >= 9.9),
+                            net_large_inflow=net_inflow
+                        )
+                        if self.filter.filter_quote(quote):
+                            seen_codes.add(code)
+                            quotes.append(quote)
+                    except Exception:
+                        continue
+                if len(diff) < 100 or len(quotes) >= page_size:
+                    break
+            except Exception as e:
+                logger.warning(f"抓取主板榜单第 {pn} 页异常: {e}")
+                break
+
+        return quotes[:page_size]
 
     def fetch_prev_day_volumes(self, codes: List[str]) -> Dict[str, float]:
         """
@@ -278,57 +311,69 @@ class OpenDataProvider:
         抓取东方财富【昨日涨停板】(BK0815) 全部成分股在今日的实际表现
         严格按沪深主板过滤，提取：代码、名称、现价、涨跌幅、最高涨幅、最低跌幅、换手、成交额、连板数等
         """
-        url = (
-            "https://push2.eastmoney.com/api/qt/clist/get?"
-            "pn=1&pz=150&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
-            "&fltt=2&invt=2&fid=f3&fs=b:BK0815"
-            "&fields=f12,f14,f2,f3,f15,f16,f17,f18,f8,f6,f21"
-        )
-        try:
-            content = self._get_url_content(url)
-            data = json.loads(content)
-            diff = data.get("data", {}).get("diff", [])
-            items = []
-            for d in diff:
-                code = str(d.get("f12", "")).strip()
-                name = str(d.get("f14", "")).strip()
-                if not self.filter.is_main_board_code(code) or not self.filter.is_valid_name(name):
-                    continue
+        items: List[Dict[str, Any]] = []
+        seen_codes = set()
+        for pn in (1, 2):
+            url = (
+                "https://push2.eastmoney.com/api/qt/clist/get?"
+                f"pn={pn}&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281"
+                "&fltt=2&invt=2&fid=f3&fs=b:BK0815"
+                "&fields=f12,f14,f2,f3,f15,f16,f17,f18,f8,f6,f21"
+            )
+            try:
+                content = self._get_url_content(url)
+                data = json.loads(content)
+                diff = (data.get("data") or {}).get("diff") or []
+                if not diff:
+                    break
+                for d in diff:
+                    try:
+                        code = str(d.get("f12", "")).strip()
+                        name = str(d.get("f14", "")).strip()
+                        if not code or code in seen_codes:
+                            continue
+                        if not self.filter.is_main_board_code(code) or not self.filter.is_valid_name(name):
+                            continue
 
-                curr_price = float(d.get("f2", 0.0) or 0.0)
-                pre_close = float(d.get("f18", 0.0) or 0.0)
-                if pre_close <= 0:
-                    continue
+                        pre_close = _safe_float(d.get("f18"))
+                        if pre_close <= 0:
+                            continue
 
-                close_pct = float(d.get("f3", 0.0) or 0.0)
-                high_price = float(d.get("f15", 0.0) or curr_price)
-                low_price = float(d.get("f16", 0.0) or curr_price)
-                high_pct = (high_price - pre_close) / pre_close * 100
-                low_pct = (low_price - pre_close) / pre_close * 100
-                turnover = float(d.get("f8", 0.0) or 0.0)
-                amount_yi = float(d.get("f6", 0.0) or 0.0) / 100000000
-                float_cap_yi = float(d.get("f21", 0.0) or 0.0) / 100000000
+                        curr_price = _safe_float(d.get("f2"), pre_close)
+                        close_pct = _safe_float(d.get("f3"))
+                        high_price = _safe_float(d.get("f15"), curr_price)
+                        low_price = _safe_float(d.get("f16"), curr_price)
+                        high_pct = (high_price - pre_close) / pre_close * 100
+                        low_pct = (low_price - pre_close) / pre_close * 100
+                        turnover = _safe_float(d.get("f8"))
+                        amount_yi = _safe_float(d.get("f6")) / 100000000
+                        float_cap_yi = _safe_float(d.get("f21")) / 100000000
 
-                limit_up_price = round(pre_close * 1.10, 2)
-                is_today_limit_up = (curr_price >= limit_up_price - 0.01) or (close_pct >= 9.90)
+                        limit_up_price = round(pre_close * 1.10, 2)
+                        is_today_limit_up = (curr_price >= limit_up_price - 0.01) or (close_pct >= 9.90)
 
-                items.append({
-                    "code": code,
-                    "name": name,
-                    "close_price": curr_price,
-                    "pre_close": pre_close,
-                    "close_pct": close_pct,
-                    "high_pct": high_pct,
-                    "low_pct": low_pct,
-                    "turnover_rate": turnover,
-                    "amount_yi": amount_yi,
-                    "float_cap_yi": float_cap_yi,
-                    "is_today_limit_up": is_today_limit_up
-                })
-            return items
-        except Exception as e:
-            logger.warning(f"抓取昨日涨停池失败: {e}")
-            return []
+                        seen_codes.add(code)
+                        items.append({
+                            "code": code,
+                            "name": name,
+                            "close_price": curr_price,
+                            "pre_close": pre_close,
+                            "close_pct": close_pct,
+                            "high_pct": high_pct,
+                            "low_pct": low_pct,
+                            "turnover_rate": turnover,
+                            "amount_yi": amount_yi,
+                            "float_cap_yi": float_cap_yi,
+                            "is_today_limit_up": is_today_limit_up
+                        })
+                    except Exception:
+                        continue
+                if len(diff) < 100:
+                    break
+            except Exception as e:
+                logger.warning(f"抓取昨日涨停池第 {pn} 页失败: {e}")
+                break
+        return items
 
     def get_consecutive_board_count(self, code: str, is_today_limit_up: bool) -> int:
         """
@@ -372,7 +417,7 @@ class OpenDataProvider:
         try:
             content = self._get_url_content(url)
             data = json.loads(content)
-            pool = data.get("data", {}).get("pool", [])
+            pool = (data.get("data") or {}).get("pool") or []
             details = {}
             for item in pool:
                 code = str(item.get("c", "")).strip()
@@ -419,7 +464,7 @@ class OpenDataProvider:
         try:
             content = self._get_url_content(url)
             data = json.loads(content)
-            pool = data.get("data", {}).get("pool", [])
+            pool = (data.get("data") or {}).get("pool") or []
             details = {}
             for item in pool:
                 code = str(item.get("c", "")).strip()
